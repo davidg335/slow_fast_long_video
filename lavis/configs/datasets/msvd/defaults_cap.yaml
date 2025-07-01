@@ -16,9 +16,10 @@ datasets:
           storage: msvd/annotation/cap_train.json
         val:
           url: https://storage.googleapis.com/sfr-vision-language-research/LAVIS/datasets/msvd/cap_val.json
-          storage: msvd/annotation/cap_val.json
+          storage: msvd/annotation/cap_val_small.json
         test:
           url: https://storage.googleapis.com/sfr-vision-language-research/LAVIS/datasets/msvd/cap_test.json
-          storage: msvd/annotation/cap_test.json
+          storage: msvd/annotation/cap_test_small.json
+        
       videos:
         storage: msvd/frames

@@ -1,6 +1,10 @@
+# export CUDA_LAUNCH_BLOCKING=1
+# export TORCH_USE_CUDA_DSA=1
+# export TORCH_DISTRIBUTED_DEBUG=DETAIL
+
 
 checkpoint_path=$1
-torchrun --nproc_per_node=4 \
+torchrun --nproc_per_node=2 \
     --master_port=34652 \
     train.py \
     --cfg-path lavis/projects/malmm/qa_msvd.yaml \
@@ -17,8 +21,8 @@ torchrun --nproc_per_node=4 \
     run.init_lr 1e-4 \
     run.max_epoch 5 \
     run.num_beams 5 \
-    run.batch_size_train 32 \
-    run.batch_size_eval 32 \
+    run.batch_size_train 8 \
+    run.batch_size_eval 8 \
     run.accum_grad_iters 1 \
     run.num_workers 12 \
     run.seed 42 \
@@ -27,4 +31,3 @@ torchrun --nproc_per_node=4 \
     run.report_metric True \
     run.prefix test \
     run.resume_ckpt_path ${checkpoint_path}
-

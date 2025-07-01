@@ -18,7 +18,7 @@ torchrun --nproc_per_node=4 \
     run.batch_size_train 16 \
     run.batch_size_eval 16 \
     run.accum_grad_iters 2 \
-    run.num_workers 12 \
+    run.num_workers 10 \
     run.seed 42 \
     run.evaluate False \
     run.valid_splits "['val']" \

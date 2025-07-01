@@ -21,7 +21,7 @@ torchrun --nproc_per_node=4 \
     run.num_workers 12 \
     run.seed 42 \
     run.evaluate False \
-    run.valid_splits "['val', 'test']" \
+    run.valid_splits "['val)s', 'test']" \
     run.report_metric True \
     run.prefix train
     # run.resume_ckpt_path

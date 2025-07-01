@@ -224,6 +224,7 @@ class Blip2Base(BaseModel):
     def init_vision_encoder(
         self, model_name, img_size, drop_path_rate, use_grad_checkpoint, precision
     ):
+        print(f"Model name is {model_name}")
         assert model_name in [
             "eva_clip_g",
             "eva2_clip_L",
@@ -362,6 +363,7 @@ def memory_bank_compress(memory_bank: torch.Tensor, compression_size: torch.Tens
         compressed_memory_bank (torch.Tensor): The compressed memory bank. Shape: (B, T-1, N, C)
         compressed_size (torch.Tensor): The number of frames compressed into each position. Shape: (B, T-1, N)
     """
+    # print(f"Memory Bank Shape: {memory_bank.shape}")
     B, T, N, C = memory_bank.shape
     # Calculate the cosine similarity between adjacent frames
     similarity_matrix = F.cosine_similarity(memory_bank[:, :-1, :], memory_bank[:, 1:, :], dim=-1)

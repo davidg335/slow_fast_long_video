@@ -1,5 +1,5 @@
 contexttimer
-decord
+eva-decord
 einops>=0.4.1
 fairscale==0.4.4
 ftfy
@@ -13,7 +13,7 @@ pandas
 plotly
 pre-commit
 pycocoevalcap
-pycocotools
+pycocotools==2.0.8
 python-magic
 scikit-image
 sentencepiece

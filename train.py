@@ -78,7 +78,11 @@ def main():
     # job_id = now()
 
     cfg = Config(parse_args())
+    
     dataset_name = list(cfg.datasets_cfg.keys())[0]
+    print(f"CONTENTS OF cfg {cfg}")
+    print(f"CONTENTS OF cfg.datasets_cfg {cfg.datasets_cfg}")
+    print(f"DATASET NAME: {dataset_name}")
     cfg.datasets_cfg[dataset_name]['num_frames'] = cfg.model_cfg.num_frames
 
     job_id = '{}/{}_{}/'.format(dataset_name, cfg.model_cfg.arch, cfg.model_cfg.model_type)

@@ -74,9 +74,19 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         self.Qformer.cls = None
 
         self.llm_tokenizer = LlamaTokenizer.from_pretrained(llm_model, use_fast=False, truncation_side="left")
+        
         self.llm_model = LlamaForCausalLM.from_pretrained(
             llm_model, torch_dtype=torch.float16
         )
+        """  
+        self.llm_model = AutoModelForCausalLM.from_pretrained(
+            llm_model,
+            torch_dtype=torch.float16,
+            trust_remote_code=True,
+            device_map="auto"  # Optional; depends on memory setup
+        )
+        """
+
         self.llm_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
         self.llm_tokenizer.add_special_tokens({'bos_token': '</s>'})
         self.llm_tokenizer.add_special_tokens({'eos_token': '</s>'})
@@ -461,6 +471,9 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
             inputs_embeds = self.llm_model.get_input_embeddings()(llm_tokens.input_ids)
             inputs_embeds = torch.cat([inputs_llm, inputs_embeds], dim=1)
             attention_mask = torch.cat([atts_llm, llm_tokens.attention_mask], dim=1)
+
+            #print("inputs_embeds:", inputs_embeds.shape)
+            #print("attention_mask:", attention_mask.shape, "values in", attention_mask.min().item(), attention_mask.max().item())
 
             outputs = self.llm_model.generate(
                 inputs_embeds=inputs_embeds,

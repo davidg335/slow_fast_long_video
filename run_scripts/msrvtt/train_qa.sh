@@ -1,4 +1,4 @@
-torchrun --nproc_per_node=4 \
+torchrun --nproc_per_node=2 \
     --master_port=34651 \
     train.py \
     --cfg-path lavis/projects/malmm/qa_msrvtt.yaml \
@@ -18,7 +18,7 @@ torchrun --nproc_per_node=4 \
     run.batch_size_train 32 \
     run.batch_size_eval 32 \
     run.accum_grad_iters 1 \
-    run.num_workers 12 \
+    run.num_workers 15 \
     run.seed 42 \
     run.evaluate False \
     run.valid_splits "['val', 'test']" \

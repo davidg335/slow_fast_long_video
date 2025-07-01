@@ -1,6 +1,5 @@
-
 checkpoint_path=$1
-torchrun --nproc_per_node=4 \
+torchrun --nproc_per_node=2\
     --master_port=34655 \
     train.py \
     --cfg-path lavis/projects/malmm/cap_msrvtt.yaml \
@@ -17,14 +16,13 @@ torchrun --nproc_per_node=4 \
     run.init_lr 1e-5 \
     run.max_epoch 10 \
     run.num_beams 5 \
-    run.batch_size_train 32 \
-    run.batch_size_eval 32 \
+    run.batch_size_train 8 \
+    run.batch_size_eval 8 \
     run.accum_grad_iters 1 \
-    run.num_workers 12 \
+    run.num_workers 10 \
     run.seed 42 \
     run.evaluate True \
     run.valid_splits "['val', 'test']" \
     run.report_metric True \
     run.prefix test \
     run.resume_ckpt_path ${checkpoint_path}
-
