@@ -158,7 +158,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         is_video = False
         if image.dim() == 5:
             is_video = True
-            B, C, T, H, W = image.shape
+            B, C, T, H, W = image.shape #batch, channel (rgb), timestep, frame height, frame width
 
         if self.qformer_text_input:
             if is_video:
@@ -218,6 +218,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         del self.compression_size
                     elif self.visual_memory_bank.size(1) > self.memory_bank_length:
                         self.visual_memory_bank, self.compression_size = memory_bank_compress(self.visual_memory_bank, self.compression_size)
+                    # add the APM function call here.
             else:
                 query_tokens = self.query_tokens.expand(B * T, -1, -1)
                 text_Qformer = self.tokenizer(
