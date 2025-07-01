@@ -9,6 +9,9 @@ The official repository of our paper "**MA-LMM: Memory-Augmented Large Multimoda
 [![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/ma-lmm-memory-augmented-large-multimodal/video-captioning-on-youcook2)](https://paperswithcode.com/sota/video-captioning-on-youcook2?p=ma-lmm-memory-augmented-large-multimodal)
 
 
+
+
+
 <p align="center">
 <img src="figs/teaser.png" alt="teaser" width="60%">
 </p>
