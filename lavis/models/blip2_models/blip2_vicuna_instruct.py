@@ -177,6 +177,8 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                 ).to(image.device)
                 query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(image.device) # [B, N]
                 Qformer_atts = torch.cat([query_atts, text_Qformer.attention_mask],dim=1)
+
+                #pass each frame through the visual encoder...
                 for t in range(T):
                     with self.maybe_autocast():
                         image_embeds = self.ln_vision(self.visual_encoder(image[:, :, t, :, :])) #[B, 256+1, 1408]
@@ -191,7 +193,14 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         encoder_hidden_states = image_embeds # [B, 1, N, C]
                         self.size_constant = torch.ones(B, 1, N).to(image_embeds.device) # [B, 1, N]
                     else:
-                        encoder_hidden_states = torch.cat([self.visual_memory_bank, image_embeds], dim=1) # [B, (t+1), N, C]
+                        encoder_hidden_states = torch.cat([self.visual_memory_bank, image_embeds], dim=1) # [B, (t+1), N, C], this is the input the cross attention step, will act as both Key and Value
+                        """
+                        #add APM here!
+                        apm_hidden_states=func_to_generate_APM_features() # want shape [B,5, N, C]
+                        apm_hidden_states_repeated = apm_hidden_states.repeat(1, 4, 1, 1) # shape: [B, 20, N, C]
+                        encoder_hidden_states=encoder_hidden_states+apm_hidden_states_repeated # want shape to be [B, (t+1), N, C]
+                        """
+                        
 
                     query_output = self.Qformer.bert(
                         text_Qformer.input_ids,
@@ -218,7 +227,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         del self.compression_size
                     elif self.visual_memory_bank.size(1) > self.memory_bank_length:
                         self.visual_memory_bank, self.compression_size = memory_bank_compress(self.visual_memory_bank, self.compression_size)
-                    # add the APM function call here.
+            #this is if there is no mem bank... ignore...
             else:
                 query_tokens = self.query_tokens.expand(B * T, -1, -1)
                 text_Qformer = self.tokenizer(
