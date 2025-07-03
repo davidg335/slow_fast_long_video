@@ -165,6 +165,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
             B, C, T, H, W = image.shape #batch, channel (rgb), timestep, frame height, frame width
             print(f"Image Shape: {image.shape}")
 
+
         if self.qformer_text_input:
             if is_video:
                 text_input = [text for text in samples["text_input"] for _ in range(T)]
@@ -183,6 +184,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                 query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(image.device) # [B, N]
                 Qformer_atts = torch.cat([query_atts, text_Qformer.attention_mask],dim=1)
 
+
                 ######################################
                 ####define the optimizer, etc for 
                 ####the apm memory model
@@ -193,6 +195,8 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                 self.apm_mem_bank_model = self.apm_mem_bank_model.cuda() 
                 ######################################
                 #forward pass through visual mem bank, qformers for each frame...
+                #pass each frame through the visual encoder...
+
                 for t in range(T):
                     with self.maybe_autocast():
                         image_embeds = self.ln_vision(self.visual_encoder(image[:, :, t, :, :])) #[B, 256+1, 1408]
@@ -211,6 +215,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         self.size_constant = torch.ones(B, 1, N).to(image_embeds.device) # [B, 1, N]
                     else:
                         encoder_hidden_states = torch.cat([self.visual_memory_bank, image_embeds], dim=1) # [B, (t+1), N, C], this is the input the cross attention step, will act as both Key and Value
+
                     memory_bank_hidden_states_summed=encoder_hidden_states    
                     """
                     if t< self.memory_bank_length:
@@ -242,6 +247,16 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     apm_memory_bank_weights = apm_memory_bank_weights.repeat(1, 4, 1, 1) # shape: [B, 20, N, C]
                     memory_bank_hidden_states_summed=encoder_hidden_states+apm_memory_bank_weights # want shape to be [B, (t+1), N, C]
                     """
+
+                        """
+                        #add APM here!
+                        apm_hidden_states=func_to_generate_APM_features() # want shape [B,5, N, C]
+                        apm_hidden_states_repeated = apm_hidden_states.repeat(1, 4, 1, 1) # shape: [B, 20, N, C]
+                        encoder_hidden_states=encoder_hidden_states+apm_hidden_states_repeated # want shape to be [B, (t+1), N, C]
+                        """
+                        
+
+
                     query_output = self.Qformer.bert(
                         text_Qformer.input_ids,
                         attention_mask=Qformer_atts,
