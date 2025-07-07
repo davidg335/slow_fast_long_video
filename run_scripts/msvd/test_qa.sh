@@ -21,10 +21,10 @@ torchrun --nproc_per_node=2 \
     run.init_lr 1e-4 \
     run.max_epoch 5 \
     run.num_beams 5 \
-    run.batch_size_train 8 \
-    run.batch_size_eval 8 \
+    run.batch_size_train 1 \
+    run.batch_size_eval 1 \
     run.accum_grad_iters 1 \
-    run.num_workers 12 \
+    run.num_workers 10 \
     run.seed 42 \
     run.evaluate True \
     run.valid_splits "['val', 'test']" \

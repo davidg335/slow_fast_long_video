@@ -68,9 +68,9 @@ class ApmMemoryBankModel(nn.Module):
         
         super(ApmMemoryBankModel, self).__init__()
         
-        self.P = 32*32 #patch size
-        self.C = 1024
-        self.fc1 = nn.Linear(2*hidden_dim, self.P)
+        self.P = h*w #patch size
+        self.C = hidden_dim
+        self.fc1 = nn.Linear(hidden_dim+h*w, self.P)
         
         self.fc2 = nn.Linear(self.P,self.C, bias = False)
         self.fc3 = nn.Linear(self.C,self.P, bias = False)
@@ -142,12 +142,14 @@ class ApmMemoryBankModel(nn.Module):
     # return the weights in which the information is compressed, these form the queries that the transformer will self attend
     def get_model_unfolded_params(self):
         # p1 is skipped thats just 
-        p2 = self.fc2.weight.data
-        p3 = self.fc3.weight.data.T 
-        p4 = self.fc4.weight.data
-        p5 = self.fc5.weight.data.T
-        p6 = self.fc6.weight.data
-        return torch.stack([p2, p3, p4, p5, p6])
+        p2 = self.fc2.weight.data.T    # [C, P] → [P, C]
+        p3 = self.fc3.weight.data      # already [P, C]
+        p4 = self.fc4.weight.data.T    # [C, P] → [P, C]
+        p5 = self.fc5.weight.data      # already [P, C]
+        p6 = self.fc6.weight.data.T    # [C, P] → [P, C]
+        
+        print(f"Model unfolded params:{torch.stack([p2, p3, p4, p5, p6]).shape}")
+        return torch.stack([p2, p3, p4, p5, p6])  # shape: [5, P, C]
         
     
     # x is all of the frames of the vid
@@ -157,12 +159,16 @@ class ApmMemoryBankModel(nn.Module):
         # print("pos", pos.shape)
         b, t, c, h, w = x.shape #h,w are 448. This is the original image
         #rearange and run conv 2d 
+        print("x shape at line 160:",x.shape) #torch.Size([1, 1, 3, 224, 224])
         x = rearrange(x, 'b t c h w -> (b t) c h w')  # shape: [32, 3, 448, 448]
         x = self.conv1(x) # shape: [32, 3, 32, 32]
         # print("x shape", x.shape)
+        print("x shape at line 164:",x.shape) #torch.Size([1, 1, 16, 16])
         x = rearrange(x, '(b t) c h w -> (b t) (h w) c', t = t, h = self.h, w= self.w) #shape: [32,1024,3]
         x = x.squeeze(-1) # squeeze channel 
         # print("x shape", x.shape)
+        feat=feat = feat[:, :, :-1, :]  # removes the last token, the cls token from Vision encoder output
+
         
         summary_feat = repeat(x, '(b t) d -> (b t)  h w d', t = t, h = self.h, w = self.w)
         summary_feat = rearrange(summary_feat, '(b t) h w d ->  b t h w d', b = b, t = t, h = self.h, w = self.w)
@@ -171,18 +177,22 @@ class ApmMemoryBankModel(nn.Module):
         pos = rearrange(pos, '(t h w) d ->  t h w d', t = t, h = self.h, w = self.w)
         pos = repeat(pos, 't h w d -> b t h w d', b = b)
         
-        # print("pos shape", pos.shape)
+        print("pos shape", pos.shape)
+        print("summary_feat shape", summary_feat.shape) #summary_feat shape torch.Size([1, 1, 16, 16, 256]), want the 256 to be 768
+
+
         input_feat = torch.cat([summary_feat, pos], dim=-1)
         input_feat = rearrange(input_feat, 'b t h w d -> (b t h w) d')  # shape: [1, 32, 32, 32, 1024]        
         #token_mask = rearrange(token_mask, 'b (t h w) -> (b t h w)', t = t, h = self.h, w = self.w).cuda()
         target_feat = rearrange(feat, 'b t (hw) d -> (b t hw) d')
-        
+        print("input feat shape", input_feat.shape)
+
         # token_mask = token_mask.bool()  # in case it's 0/1
         # input_feat = input_feat[token_mask]  # filter out the masked tokens
         # target_feat = target_feat[token_mask]
 
-        token_mask = torch.zeros((h//self.patch_size)*(w//self.patch_size)*t)
-        token_mask = torch.zeros_like(token_mask)  # reset token_mask to all zeros, as we don't need it anymore
+        token_mask = torch.zeros((h // self.patch_size) * (w // self.patch_size) * t, dtype=torch.bool)
+        #token_mask = torch.zeros_like(token_mask)  # reset token_mask to all zeros, as we don't need it anymore
         #set random 2000 locations to 1
         num_ones = 2000
         indices = torch.randperm(token_mask.numel())[:num_ones]
@@ -215,7 +225,10 @@ class ApmMemoryBankModel(nn.Module):
             else:
                 feat_out = torch.cat([feat_out, feat_chunk], dim=0)
                 rgb_out = None #torch.cat([rgb_out, rgb_chunk], dim=0)
-       
+        print("shape of feat_out",feat_out.shape)
+        print("shape of target_feat",target_feat.shape)
+        
+
         feat_loss = F.mse_loss(feat_out, target_feat)
         # print("outtttt", feat_out.shape, target_feat.shape)
         # exit(1)
