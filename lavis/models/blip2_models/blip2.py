@@ -21,6 +21,7 @@ from lavis.common.utils import is_url
 from lavis.common.logger import MetricLogger
 from lavis.models.base_model import BaseModel
 from lavis.models.blip2_models.Qformer import BertConfig, BertLMHeadModel, BertSelfAttention, BertAttention, BertLayer, BertModel, BertEncoder
+
 from lavis.models.eva_vit import create_eva_vit_g
 from lavis.models.clip_vit import create_clip_vit_L
 from transformers import BertTokenizer
@@ -42,6 +43,8 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
+
+from lavis.models.blip2_models.Qformer import BertIntermediate, BertOutput
 
 class MBBertSelfAttention(BertSelfAttention):
     def forward(
@@ -209,12 +212,23 @@ class Blip2Base(BaseModel):
         # insert cross-attention layer every other block
         encoder_config.add_cross_attention = True
         encoder_config.cross_attention_freq = cross_attention_freq
+        print(f"cross attention freq {cross_attention_freq}")
         encoder_config.query_length = num_query_token
         encoder_config.memory_bank_length = memory_bank_length
         Qformer = BertLMHeadModel.from_pretrained(
             "bert-base-uncased", config=encoder_config
         )
         Qformer.bert = apply_memory_bank(Qformer.bert, memory_bank_length, num_frames)
+        #here we add another cross attention layer 
+        
+        for i, layer in enumerate(Qformer.bert.encoder.layer):
+            if hasattr(layer, 'crossattention'):
+                print(f"applying cross attention to bert layer {i}")
+                Qformer.bert.encoder.layer[i] = BertLayerWithDoubleCrossAttention(layer, encoder_config)
+        print("###########################################################################")
+        logging.info(str(Qformer.bert))
+       
+        #
         query_tokens = nn.Parameter(
             torch.zeros(1, num_query_token, encoder_config.hidden_size)
         )
@@ -394,12 +408,14 @@ def memory_bank_compress(memory_bank: torch.Tensor, compression_size: torch.Tens
     return compressed_memory_bank, dst_size
 
 def apply_memory_bank(model, memory_bank_length, num_frames):
+    i=1
     for module in model.modules():
         if isinstance(module, BertSelfAttention):
+            print(f"layer {i}, has cross attention, module is {module}")
             if memory_bank_length > 0:
                 module.__class__ = MBBertSelfAttention
                 module.memory_bank_length = memory_bank_length
-                module.num_frames = num_frames
+                module.num_frames = num_frames    
     logging.info(str(model))
     return model
 
@@ -533,3 +549,95 @@ def compute_sim_matrix(model, data_loader, **kwargs):
     logging.info("Evaluation time {}".format(total_time_str))
 
     return score_matrix_i2t.cpu().numpy(), score_matrix_t2i.cpu().numpy()
+
+
+
+
+
+############## new code to implement a second cross attention block
+class BertLayerWithDoubleCrossAttention(nn.Module):
+    def __init__(self, original_layer, config):
+        super().__init__()
+
+        # Reuse original modules
+        self.attention = original_layer.attention           # Self-Attention 1
+        self.crossattention = original_layer.crossattention # Cross-Attention 1
+        self.intermediate = original_layer.intermediate
+        self.output = original_layer.output
+        self.intermediate_query = original_layer.intermediate_query
+        self.output_query = original_layer.output_query
+
+        # New added layers
+        self.selfattention2 = BertAttention(config)         # Self-Attention 2
+        self.crossattention2 = BertAttention(config)        # Cross-Attention 2
+
+        # Feedforward layers for new attentions
+        self.intermediate_query2 = BertIntermediate(config)
+        self.output_query2 = BertOutput(config)
+
+        self.add_cross_attention = True
+
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        head_mask=None,
+        encoder_hidden_states=None,
+        apm_hidden_states=None,
+        encoder_attention_mask=None,
+        past_key_value=None,
+        output_attentions=False,
+    ):
+        # First self-attention
+        self_outputs = self.attention(
+            hidden_states,
+            attention_mask,
+            head_mask,
+            output_attentions=output_attentions,
+        )
+        attention_output = self_outputs[0]
+        outputs = self_outputs[1:]  # attentions if any
+
+        # First cross-attention + FFN
+        cross_outputs = self.crossattention(
+            attention_output,
+            attention_mask,
+            head_mask,
+            encoder_hidden_states,
+            encoder_attention_mask,
+            output_attentions,
+        )
+        attention_output = cross_outputs[0]
+        outputs = outputs + cross_outputs[1:]
+
+        attention_output = self.output_query(self.intermediate_query(attention_output), attention_output)
+
+        #  Second self-attention (new)
+        self_outputs2 = self.selfattention2(
+            attention_output,
+            attention_mask,
+            head_mask,
+            output_attentions=output_attentions,
+        )
+        attention_output = self_outputs2[0]
+        outputs = outputs + self_outputs2[1:]
+
+        # Second cross-attention (new) + FFN
+        cross_outputs2 = self.crossattention2(
+            attention_output,
+            attention_mask,
+            head_mask,
+            apm_hidden_states,
+            encoder_attention_mask,
+            output_attentions,
+        )
+        attention_output = cross_outputs2[0]
+        outputs = outputs + cross_outputs2[1:]
+
+        attention_output = self.output_query2(self.intermediate_query2(attention_output), attention_output)
+
+        # Final FFN
+        layer_output = self.output(self.intermediate(attention_output), attention_output)
+        outputs = (layer_output,) + outputs
+
+        return outputs

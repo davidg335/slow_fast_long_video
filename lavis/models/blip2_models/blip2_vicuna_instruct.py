@@ -35,7 +35,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         num_query_token=32,
         llm_model="",
         prompt="",
-        max_txt_len=128,
+        max_txt_len=8,
         max_output_txt_len=256,
         apply_lemmatizer=False,
         qformer_text_input=True,
@@ -60,11 +60,11 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
             self.visual_encoder = self.visual_encoder.eval()
             self.visual_encoder.train = disabled_train
             logging.info("freeze vision encoder")
-
+        print(f"Inputs to the Qformer... \n num_query_token {num_query_token} \n self.visual_encoder.num_features {self.visual_encoder.num_features} \n memory_bank_length {memory_bank_length} \n num_frames {num_frames}")
         self.Qformer, self.query_tokens = self.init_Qformer(
             num_query_token, self.visual_encoder.num_features, memory_bank_length=memory_bank_length, num_frames=num_frames,
         )
-
+        print(f"qformer_text_input value:{qformer_text_input}")
         if not qformer_text_input:
             self.Qformer.bert.embeddings.word_embeddings = None
             self.Qformer.bert.embeddings.position_embeddings = None
@@ -192,8 +192,9 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                 
                 #initialize the APM memory bank
                 print("about to instantiate apm model ...")
-                self.apm_mem_bank_model = ApmMemoryBankModel(hidden_dim=768, t = 1, h = 32, w = 32, fwd_chunk_size = 16) 
-                self.apm_mem_bank_model = self.apm_mem_bank_model.cuda() 
+                apm_mem_bank_model = ApmMemoryBankModel(hidden_dim=1408, t = 1, h = 16, w = 16, fwd_chunk_size = 16) 
+                apm_mem_bank_model = apm_mem_bank_model.cuda() 
+                apm_optimizer = torch.optim.Adam(apm_mem_bank_model.parameters(), lr=1e-3)
                 print("apm made...")
                 ######################################
                 #forward pass through visual mem bank, qformers for each frame...
@@ -202,8 +203,8 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         image_embeds = self.ln_vision(self.visual_encoder(image[:, :, t, :, :])) #[B, 256+1, 1408]
                     N, C = image_embeds.shape[-2:] # N is the number of patches associated with each image. The vision encoder takes in a frame, splits into 16 rows and 16 col of patches. C is the feature depth for each patch
                     # for Breakfast, N is size __ and C is size __
-                    print("The value of N: {N}")
-                    print("The value of C: {C}")
+                    #print("The value of N: {N}")
+                    #print("The value of C: {C}")
                     position_ids = torch.tensor([t]).long().to(image_embeds.device) #[1]
                     position_ids = position_ids.unsqueeze(0).expand(B, -1) #[B, 1]
                     image_embeds = image_embeds + self.image_pe(position_ids) # [B, N, C]
@@ -216,7 +217,11 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     else:
                         encoder_hidden_states = torch.cat([self.visual_memory_bank, image_embeds], dim=1) # [B, (t+1), N, C], this is the input the cross attention step, will act as both Key and Value
                     memory_bank_hidden_states_summed=encoder_hidden_states    
-                    """
+                    #############################################
+                    #############################################
+                    ################APM-CODE#####################
+                    
+                    print(f"We are at timestep t={t}")
                     if t< self.memory_bank_length:
                         #do 5 iterations of training
                         steps_per_slice=5
@@ -224,33 +229,66 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         #do 2 iterations of training
                         steps_per_slice=2
                     
-                    # image shape B, C, T, H, W, image[:, :, t, :, :] shape is B,C,1,H,W
-                    frames=image[:, :, t, :, :] # want shape [B,1,C,H,W],torch.Size([1, 10, 3, 448, 448])
-                    frames = frames.permute(0, 2, 1, 3, 4)  # now shape [B, 1, C, H, W]. H,W are original pixel dims of image
-                    feat=image_embeds #feature rep for the current frame that we are on, shape is [B, 1, N, C] want [B,1,N,C] ([1, 10, 1024, 1024]), good
-                    pos = model.init_positional_encoding(start_time = t)
+                    # image shape B, C, T, H, W, image[:, :, t, :, :] 
+                    #frames=image[:, :, t, :, :] # want shape [B,1,C,H,W],torch.Size([1, 10, 3, 448, 448])
+                    frames = image[:, :, t, :, :]           # shape: [B, C, H, W] → 4D
+                    frames = frames.unsqueeze(2)            # shape: [B, C, 1, H, W] → 5D
+                    frames = frames.permute(0, 2, 1, 3, 4)  # shape: [B, 1, C, H, W]
+                    #print(f"Frames shape: {frames.shape}")
+                    #frames = frames.permute(0, 2, 1, 3, 4)  # now shape [B, 1, C, H, W]. H,W are original pixel dims of image
+                    feat=image_embeds #feature rep for the current frame that we are on, shape is [B, 1, N, C] want [B,1,N-1,C] ([1, 10, 256, 1408]), good
+                    pos = apm_mem_bank_model.init_positional_encoding(start_time = t)
                     token_mask=None
+                    #print(f"Shape of feat:{feat.shape}")
+                    #print(f"Shape of pos:{pos.shape}")
+                    #print(f"Shape of frames:{frames.shape}")
                     
                     #update APM weights based on new frame
-                    for j in range(steps_per_slice):
-                        self.apm_optimizer.zero_grad()
-                        loss = self.apm_mem_bank_model.forward_wrapper(frames, feat, pos, token_mask)
-                        loss.backward()
-                        self.apm_optimizer.step()
-                        avg_loss.append(loss.item())
-                        #take last 10 entries and avg them 
-                        print(f"Slice {i+1}/{n_slices}, Step {j+1}/{steps_per_slice}, Loss: {np.average(avg_loss[-10:])}")
+                    avg_loss = []
+                    with torch.set_grad_enabled(True):
+                        for j in range(steps_per_slice):
+                            apm_optimizer.zero_grad()
+                            loss = apm_mem_bank_model.forward_wrapper(frames, feat, pos, token_mask)
+                            loss.backward()
+                            apm_optimizer.step()
+                            avg_loss.append(loss.item())
+                            #take last 10 entries and avg them 
+                            print(f"Slice {t+1}/{T}, Step {j+1}/{steps_per_slice}, Loss: {np.average(avg_loss[-10:])}")
                     #add APM here!
-                    apm_memory_bank_weights = model.get_model_unfolded_params() # shape is torch.Size([5, N, 1024]), want shape [B,5, N, C]
+                    apm_memory_bank_weights = apm_mem_bank_model.get_model_unfolded_params() # shape is torch.Size([5, 256, 1408]), want shape [B,5, N, C]
+                    apm_memory_bank_weights = apm_memory_bank_weights.unsqueeze(0)  # Shape: [1, 5, N, 1024]
                      # want shape [B,5, N, C]
-                    apm_memory_bank_weights = apm_memory_bank_weights.repeat(1, 4, 1, 1) # shape: [B, 20, N, C]
-                    memory_bank_hidden_states_summed=encoder_hidden_states+apm_memory_bank_weights # want shape to be [B, (t+1), N, C]
-                    """
+                    repeat_factor=self.memory_bank_length//5
+                    #print(f"Memory bank length:{self.memory_bank_length}")
+                    apm_memory_bank_weights = apm_memory_bank_weights.repeat(1, repeat_factor, 1, 1) # shape: [B, 20, N, C]
+                    ## add padding to vis mem bank so I can add it to the apm
+                    _, k, _, _ = self.visual_memory_bank.shape
+                    desired_k = self.memory_bank_length #should be 20
+                    #print(f"Shape of visual memory bank: {self.visual_memory_bank.shape}")
+                    if k < desired_k:
+                        pad_size = desired_k - k
+                        padding = torch.zeros(B, pad_size, N, C, device=self.visual_memory_bank.device, dtype=self.visual_memory_bank.dtype)
+                        visual_memory_bank_padded = torch.cat([self.visual_memory_bank, padding], dim=1)
+                    else:
+                        visual_memory_bank_padded = self.visual_memory_bank
+                    zeros = torch.zeros(B, self.memory_bank_length, 1, C, device=apm_memory_bank_weights.device, dtype=apm_memory_bank_weights.dtype) #[B, 20, 256, C] to [B, 20, 257, C] to match visual mem bank size
+                    #print(f"Shape of apm memory bank weights: {apm_memory_bank_weights.shape}")
+                    #print(f"Shape of zeros: {zeros.shape}")
+
+                    apm_memory_bank_weights_padded = torch.cat([apm_memory_bank_weights, zeros], dim=-2)
+                    ##print(f"Shape of padded visual memory bank: {visual_memory_bank_padded.shape}")
+                    #print(f"Shape of padded apm memory bank weights: {apm_memory_bank_weights_padded.shape}")
+
+                    #memory_bank_hidden_states_summed = visual_memory_bank_padded + apm_memory_bank_weights_padded # want shape to be [B, 20, N, C], N=257
+                    #print("visual mem bank size: ", self.visual_memory_bank.shape)
+                    #############################################
+                    #############################################
                     query_output = self.Qformer.bert(
                         text_Qformer.input_ids,
                         attention_mask=Qformer_atts,
                         query_embeds=query_tokens,
-                        encoder_hidden_states=memory_bank_hidden_states_summed.view(B, -1, C),
+                        encoder_hidden_states=visual_memory_bank_padded.view(B, -1, C),
+                        apm_hidden_states=apm_memory_bank_weights.view(B, -1, C),
                         encoder_attention_mask=image_atts,
                         return_dict=True,
                     )
@@ -406,7 +444,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         if image.dim() == 5:
             is_video = True
             B, C, T, H, W = image.shape
-            print("The shape of the frames/images for vid",image.shape)
+            #print("The shape of the frames/images for vid",image.shape)
 
         if isinstance(prompt, str):
             prompt = [prompt] * B
@@ -490,14 +528,14 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     frames = image[:, :, t, :, :]           # shape: [B, C, H, W] → 4D
                     frames = frames.unsqueeze(2)            # shape: [B, C, 1, H, W] → 5D
                     frames = frames.permute(0, 2, 1, 3, 4)  # shape: [B, 1, C, H, W]
-                    print(f"Frames shape: {frames.shape}")
+                    #print(f"Frames shape: {frames.shape}")
                     #frames = frames.permute(0, 2, 1, 3, 4)  # now shape [B, 1, C, H, W]. H,W are original pixel dims of image
                     feat=image_embeds #feature rep for the current frame that we are on, shape is [B, 1, N, C] want [B,1,N-1,C] ([1, 10, 256, 1408]), good
                     pos = apm_mem_bank_model.init_positional_encoding(start_time = t)
                     token_mask=None
-                    print(f"Shape of feat:{feat.shape}")
-                    print(f"Shape of pos:{pos.shape}")
-                    print(f"Shape of frames:{frames.shape}")
+                    #print(f"Shape of feat:{feat.shape}")
+                    #print(f"Shape of pos:{pos.shape}")
+                    #print(f"Shape of frames:{frames.shape}")
                     
                     #update APM weights based on new frame
                     avg_loss = []
@@ -515,12 +553,12 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     apm_memory_bank_weights = apm_memory_bank_weights.unsqueeze(0)  # Shape: [1, 5, N, 1024]
                      # want shape [B,5, N, C]
                     repeat_factor=self.memory_bank_length//5
-                    print(f"Memory bank length:{self.memory_bank_length}")
+                    #print(f"Memory bank length:{self.memory_bank_length}")
                     apm_memory_bank_weights = apm_memory_bank_weights.repeat(1, repeat_factor, 1, 1) # shape: [B, 20, N, C]
                     ## add padding to vis mem bank so I can add it to the apm
                     _, k, _, _ = self.visual_memory_bank.shape
                     desired_k = self.memory_bank_length #should be 20
-                    print(f"Shape of visual memory bank: {self.visual_memory_bank.shape}")
+                    #print(f"Shape of visual memory bank: {self.visual_memory_bank.shape}")
                     if k < desired_k:
                         pad_size = desired_k - k
                         padding = torch.zeros(B, pad_size, N, C, device=self.visual_memory_bank.device, dtype=self.visual_memory_bank.dtype)
@@ -528,22 +566,23 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     else:
                         visual_memory_bank_padded = self.visual_memory_bank
                     zeros = torch.zeros(B, self.memory_bank_length, 1, C, device=apm_memory_bank_weights.device, dtype=apm_memory_bank_weights.dtype) #[B, 20, 256, C] to [B, 20, 257, C] to match visual mem bank size
-                    print(f"Shape of apm memory bank weights: {apm_memory_bank_weights.shape}")
-                    print(f"Shape of zeros: {zeros.shape}")
+                    #print(f"Shape of apm memory bank weights: {apm_memory_bank_weights.shape}")
+                    #print(f"Shape of zeros: {zeros.shape}")
 
                     apm_memory_bank_weights_padded = torch.cat([apm_memory_bank_weights, zeros], dim=-2)
-                    print(f"Shape of padded visual memory bank: {visual_memory_bank_padded.shape}")
-                    print(f"Shape of padded apm memory bank weights: {apm_memory_bank_weights_padded.shape}")
+                    ##print(f"Shape of padded visual memory bank: {visual_memory_bank_padded.shape}")
+                    #print(f"Shape of padded apm memory bank weights: {apm_memory_bank_weights_padded.shape}")
 
-                    memory_bank_hidden_states_summed = visual_memory_bank_padded + apm_memory_bank_weights_padded # want shape to be [B, 20, N, C], N=257
-                    print("visual mem bank size: ", self.visual_memory_bank.shape)
+                    #memory_bank_hidden_states_summed = visual_memory_bank_padded + apm_memory_bank_weights_padded # want shape to be [B, 20, N, C], N=257
+                    #print("visual mem bank size: ", self.visual_memory_bank.shape)
                     #############################################
                     #############################################
                     query_output = self.Qformer.bert(
                         text_Qformer.input_ids,
                         attention_mask=Qformer_atts,
                         query_embeds=query_tokens,
-                        encoder_hidden_states=memory_bank_hidden_states_summed.view(B, -1, C),
+                        encoder_hidden_states=visual_memory_bank_padded.view(B, -1, C),
+                        apm_hidden_states=apm_memory_bank_weights.view(B, -1, C),
                         encoder_attention_mask=image_atts,
                         return_dict=True,
                     )
