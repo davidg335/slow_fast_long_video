@@ -17,7 +17,7 @@ torchrun --nproc_per_node=2 \
     model.vit_precision fp16 \
     model.freeze_vit True \
     model.memory_bank_length 10 \
-    model.num_frames 20 \
+    model.num_frames 102 \
     run.init_lr 1e-4 \
     run.max_epoch 5 \
     run.num_beams 5 \

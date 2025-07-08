@@ -165,8 +165,8 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         if image.dim() == 5:
             is_video = True
             B, C, T, H, W = image.shape #batch, channel (rgb), timestep, frame height, frame width
-            print(f"Image Shape: {image.shape}")
-
+            print(f"Image Shape: {image.shape}") # [8,3,20,224,224]
+            print(f"Image info:{image[:,0,-1,0,0]}")
         if self.qformer_text_input:
             if is_video:
                 text_input = [text for text in samples["text_input"] for _ in range(T)]
@@ -197,7 +197,75 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                 apm_optimizer = torch.optim.Adam(apm_mem_bank_model.parameters(), lr=1e-3)
                 print("apm made...")
                 ######################################
+                
+                #here train the APM
+                print("Starting APM training...")
+                for t in range(T):
+                    with self.maybe_autocast():
+                        image_embeds = self.ln_vision(self.visual_encoder(image[:, :, t, :, :])) #[B, 256+1, 1408]
+                    N, C = image_embeds.shape[-2:] # N is the number of patches associated with each image. The vision encoder takes in a frame, splits into 16 rows and 16 col of patches. C is the feature depth for each patch
+                    # for Breakfast, N is size __ and C is size __
+                    #print("The value of N: {N}")
+                    #print("The value of C: {C}")
+                    position_ids = torch.tensor([t]).long().to(image_embeds.device) #[1]
+                    position_ids = position_ids.unsqueeze(0).expand(B, -1) #[B, 1]
+                    image_embeds = image_embeds + self.image_pe(position_ids) # [B, N, C]
+                    image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(image.device) # [B, N]
+                    image_embeds = image_embeds.unsqueeze(1) # [B, 1, N, C]
+
+                    if t == 0:
+                        encoder_hidden_states = image_embeds # [B, 1, N, C]
+                        self.size_constant = torch.ones(B, 1, N).to(image_embeds.device) # [B, 1, N]
+                    else:
+                        encoder_hidden_states = torch.cat([self.visual_memory_bank, image_embeds], dim=1) # [B, (t+1), N, C], this is the input the cross attention step, will act as both Key and Value
+                    memory_bank_hidden_states_summed=encoder_hidden_states    
+                    #############################################
+                    #############################################
+                    ################APM-CODE#####################
+                    
+                    print(f"We are at frame {t}/{T} for batch size {B}")
+                    if t< self.memory_bank_length:
+                        #do 5 iterations of training
+                        steps_per_slice=3
+                    else:
+                        #do 2 iterations of training
+                        steps_per_slice=1
+                    
+                    # image shape B, C, T, H, W, image[:, :, t, :, :] 
+                    #frames=image[:, :, t, :, :] # want shape [B,1,C,H,W],torch.Size([1, 10, 3, 448, 448])
+                    frames = image[:, :, t, :, :]           # shape: [B, C, H, W]. this is a batch of B frames
+                    frames = frames.unsqueeze(2)            # shape: [B, C, 1, H, W] → 5D
+                    frames = frames.permute(0, 2, 1, 3, 4)  # shape: [B, 1, C, H, W]
+                    #print(f"Frames shape: {frames.shape}")
+                    #frames = frames.permute(0, 2, 1, 3, 4)  # now shape [B, 1, C, H, W]. H,W are original pixel dims of image
+                    feat=image_embeds #feature rep for the current frame that we are on, shape is [B, 1, N, C] want [B,1,N-1,C] ([1, 10, 256, 1408]), good
+                    pos = apm_mem_bank_model.init_positional_encoding(start_time = t)
+                    token_mask=None
+                    #print(f"Shape of feat:{feat.shape}")
+                    #print(f"Shape of pos:{pos.shape}")
+                    #print(f"Shape of frames:{frames.shape}")
+                    
+                    #update APM weights based on new frame
+                    avg_loss = []
+                    with torch.set_grad_enabled(True):
+                        for j in range(steps_per_slice):
+                            apm_optimizer.zero_grad()
+                            loss = apm_mem_bank_model.forward_wrapper(frames, feat, pos, token_mask)
+                            loss.backward()
+                            apm_optimizer.step()
+                            avg_loss.append(loss.item())
+                            #take last 10 entries and avg them 
+                            print(f"Slice {t+1}/{T}, Step {j+1}/{steps_per_slice}, Loss: {np.average(avg_loss[-10:])}")
+                    #print(f"Memory bank length:{self.memory_bank_length}")
+                    
+                    #############################################
+                    #############################################
+                #now, freeze the APM
+                apm_memory_bank_weights = apm_mem_bank_model.get_model_unfolded_params() # shape is torch.Size([5, 256, 1408]), want shape [B,5, N, C]
+                apm_memory_bank_weights = apm_memory_bank_weights.unsqueeze(0)  # Shape: [1, 5, N, 1024]   
+                #torch.save(apm_mem_bank_model.state_dict(), 'apm_memory_bank_model.pth')
                 #forward pass through visual mem bank, qformers for each frame...
+                #here, T is the number of batches [:,:,1,:,:] is batch number one, [:,:,2,:,:] number 2 etc
                 for t in range(T):
                     with self.maybe_autocast():
                         image_embeds = self.ln_vision(self.visual_encoder(image[:, :, t, :, :])) #[B, 256+1, 1408]
@@ -224,10 +292,10 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     print(f"We are at timestep t={t}")
                     if t< self.memory_bank_length:
                         #do 5 iterations of training
-                        steps_per_slice=5
+                        steps_per_slice=3
                     else:
                         #do 2 iterations of training
-                        steps_per_slice=2
+                        steps_per_slice=1
                     
                     # image shape B, C, T, H, W, image[:, :, t, :, :] 
                     #frames=image[:, :, t, :, :] # want shape [B,1,C,H,W],torch.Size([1, 10, 3, 448, 448])
@@ -444,6 +512,8 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         if image.dim() == 5:
             is_video = True
             B, C, T, H, W = image.shape
+            print(f"Image Shape: {image.shape}") # [8,3,20,224,224]
+            print(f"Image info:{image[:,0,-1,0,0]}")
             #print("The shape of the frames/images for vid",image.shape)
 
         if isinstance(prompt, str):

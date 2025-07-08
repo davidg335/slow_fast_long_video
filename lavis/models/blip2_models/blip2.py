@@ -416,7 +416,7 @@ def apply_memory_bank(model, memory_bank_length, num_frames):
                 module.__class__ = MBBertSelfAttention
                 module.memory_bank_length = memory_bank_length
                 module.num_frames = num_frames    
-    logging.info(str(model))
+    #logging.info(str(model))
     return model
 
 
@@ -561,19 +561,19 @@ class BertLayerWithDoubleCrossAttention(nn.Module):
 
         # Reuse original modules
         self.attention = original_layer.attention           # Self-Attention 1
-        self.crossattention = original_layer.crossattention # Cross-Attention 1
+        self.crossattention_apm = BertAttention(config)        # Cross-Attention 2
+        self.crossattention_vmb = original_layer.crossattention # Cross-Attention 1
         self.intermediate = original_layer.intermediate
         self.output = original_layer.output
         self.intermediate_query = original_layer.intermediate_query
         self.output_query = original_layer.output_query
 
         # New added layers
-        self.selfattention2 = BertAttention(config)         # Self-Attention 2
-        self.crossattention2 = BertAttention(config)        # Cross-Attention 2
+        #self.selfattention2 = BertAttention(config)         # Self-Attention 2
 
         # Feedforward layers for new attentions
-        self.intermediate_query2 = BertIntermediate(config)
-        self.output_query2 = BertOutput(config)
+        #self.intermediate_query2 = BertIntermediate(config)
+        #self.output_query2 = BertOutput(config)
 
         self.add_cross_attention = True
 
@@ -598,32 +598,7 @@ class BertLayerWithDoubleCrossAttention(nn.Module):
         attention_output = self_outputs[0]
         outputs = self_outputs[1:]  # attentions if any
 
-        # First cross-attention + FFN
-        cross_outputs = self.crossattention(
-            attention_output,
-            attention_mask,
-            head_mask,
-            encoder_hidden_states,
-            encoder_attention_mask,
-            output_attentions,
-        )
-        attention_output = cross_outputs[0]
-        outputs = outputs + cross_outputs[1:]
-
-        attention_output = self.output_query(self.intermediate_query(attention_output), attention_output)
-
-        #  Second self-attention (new)
-        self_outputs2 = self.selfattention2(
-            attention_output,
-            attention_mask,
-            head_mask,
-            output_attentions=output_attentions,
-        )
-        attention_output = self_outputs2[0]
-        outputs = outputs + self_outputs2[1:]
-
-        # Second cross-attention (new) + FFN
-        cross_outputs2 = self.crossattention2(
+        cross_outputs2 = self.crossattention_apm(
             attention_output,
             attention_mask,
             head_mask,
@@ -634,7 +609,32 @@ class BertLayerWithDoubleCrossAttention(nn.Module):
         attention_output = cross_outputs2[0]
         outputs = outputs + cross_outputs2[1:]
 
-        attention_output = self.output_query2(self.intermediate_query2(attention_output), attention_output)
+        # First cross-attention + FFN
+        cross_outputs = self.crossattention_vmb(
+            attention_output,
+            attention_mask,
+            head_mask,
+            encoder_hidden_states,
+            encoder_attention_mask,
+            output_attentions,
+        )
+        attention_output = cross_outputs[0]
+        outputs = outputs + cross_outputs[1:]
+
+        """
+        #  Second self-attention (new)
+        self_outputs2 = self.selfattention2(
+            attention_output,
+            attention_mask,
+            head_mask,
+            output_attentions=output_attentions,
+        )
+        attention_output = self_outputs2[0]
+        outputs = outputs + self_outputs2[1:]
+        """
+
+        attention_output = self.output_query(self.intermediate_query(attention_output), attention_output)
+        #attention_output = self.output_query2(self.intermediate_query2(attention_output), attention_output)
 
         # Final FFN
         layer_output = self.output(self.intermediate(attention_output), attention_output)
