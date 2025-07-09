@@ -50,7 +50,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         from lavis.models.blip2_models.modeling_llama import LlamaForCausalLM
         
         self.tokenizer = self.init_tokenizer(truncation_side="left")
-
+        self.img_size=img_size
         self.visual_encoder, self.ln_vision = self.init_vision_encoder(
             vit_model, img_size, drop_path_rate, use_grad_checkpoint, vit_precision
         )
@@ -125,6 +125,13 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         self.image_pe = nn.Embedding(max_num_frames, 1408)
         nn.init.constant_(self.image_pe.weight, 0.0)
         print("init for Blip2")
+        #initialize the APM memory bank
+        print("about to instantiate apm model ...")
+        self.forward_chunk_size=16
+        self.apm_mem_bank_model = ApmMemoryBankModel(hidden_dim=1408, t = 16, h = self.img_size//14, w = self.img_size//14, fwd_chunk_size = self.forward_chunk_size) 
+        self.apm_mem_bank_model = self.apm_mem_bank_model.cuda() 
+        self.apm_optimizer = torch.optim.Adam(self.apm_mem_bank_model.parameters(), lr=1e-3)
+        print("apm made...")
 
 
 
@@ -158,7 +165,6 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         # print(samples["text_output"])
         # print('-----------------')
         print("entering forward pass")
-
         image = samples["image"]
         # For video data
         is_video = False
@@ -184,179 +190,96 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                 ).to(image.device)
                 query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(image.device) # [B, N]
                 Qformer_atts = torch.cat([query_atts, text_Qformer.attention_mask],dim=1)
-
-                ######################################
-                ####define the optimizer, etc for 
-                ####the apm memory model
-                # have one APM for each video being processed.
-                
-                #initialize the APM memory bank
-                print("about to instantiate apm model ...")
-                apm_mem_bank_model = ApmMemoryBankModel(hidden_dim=1408, t = 1, h = 16, w = 16, fwd_chunk_size = 16) 
-                apm_mem_bank_model = apm_mem_bank_model.cuda() 
-                apm_optimizer = torch.optim.Adam(apm_mem_bank_model.parameters(), lr=1e-3)
-                print("apm made...")
-                ######################################
-                
-                #here train the APM
+                ########APM#######################
                 print("Starting APM training...")
+                #get the image embeddings for the whole video
+                with torch.no_grad():
+                    with self.maybe_autocast():
+                        sample_embeds = self.ln_vision(self.visual_encoder(image[:, :, 0, :, :]))  # [B, 257, 1408]
+                        N, C = sample_embeds.shape[-2:]  # N = 257, C = 1408
+
+                image_embeds_wholevid = torch.zeros(B, T, N, C, device=image.device, dtype=sample_embeds.dtype)  # [B, T, 257, 1408]
+                image_atts_wholevid = torch.zeros(B, T, N, device=image.device, dtype=torch.long)  # [B, T, 257]
+                # for video vid, store embeddings for each frame in image_embeds_wholevid
                 for t in range(T):
                     with self.maybe_autocast():
-                        image_embeds = self.ln_vision(self.visual_encoder(image[:, :, t, :, :])) #[B, 256+1, 1408]
-                    N, C = image_embeds.shape[-2:] # N is the number of patches associated with each image. The vision encoder takes in a frame, splits into 16 rows and 16 col of patches. C is the feature depth for each patch
-                    # for Breakfast, N is size __ and C is size __
-                    #print("The value of N: {N}")
-                    #print("The value of C: {C}")
-                    position_ids = torch.tensor([t]).long().to(image_embeds.device) #[1]
+                        image_embeds_t = self.ln_vision(self.visual_encoder(image[:, :, t, :, :]))  # [B, 257, 1408]
+                        
+                    position_ids = torch.tensor([t]).long().to(image_embeds_t.device) #[1]
                     position_ids = position_ids.unsqueeze(0).expand(B, -1) #[B, 1]
-                    image_embeds = image_embeds + self.image_pe(position_ids) # [B, N, C]
-                    image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(image.device) # [B, N]
-                    image_embeds = image_embeds.unsqueeze(1) # [B, 1, N, C]
+                    image_embeds_t = image_embeds_t + self.image_pe(position_ids) # [B, N, C]
+                    image_atts = torch.ones(image_embeds_t.size()[:-1], dtype=torch.long).to(image.device) # [B, N]
+                    #image_embeds_t = image_embeds_t.unsqueeze(1) # [B, 1, N, C]
 
-                    if t == 0:
-                        encoder_hidden_states = image_embeds # [B, 1, N, C]
-                        self.size_constant = torch.ones(B, 1, N).to(image_embeds.device) # [B, 1, N]
-                    else:
-                        encoder_hidden_states = torch.cat([self.visual_memory_bank, image_embeds], dim=1) # [B, (t+1), N, C], this is the input the cross attention step, will act as both Key and Value
-                    memory_bank_hidden_states_summed=encoder_hidden_states    
-                    #############################################
-                    #############################################
-                    ################APM-CODE#####################
-                    
-                    print(f"We are at frame {t}/{T} for batch size {B}")
-                    if t< self.memory_bank_length:
-                        #do 5 iterations of training
-                        steps_per_slice=3
-                    else:
-                        #do 2 iterations of training
-                        steps_per_slice=1
-                    
-                    # image shape B, C, T, H, W, image[:, :, t, :, :] 
-                    #frames=image[:, :, t, :, :] # want shape [B,1,C,H,W],torch.Size([1, 10, 3, 448, 448])
-                    frames = image[:, :, t, :, :]           # shape: [B, C, H, W]. this is a batch of B frames
-                    frames = frames.unsqueeze(2)            # shape: [B, C, 1, H, W] → 5D
-                    frames = frames.permute(0, 2, 1, 3, 4)  # shape: [B, 1, C, H, W]
-                    #print(f"Frames shape: {frames.shape}")
-                    #frames = frames.permute(0, 2, 1, 3, 4)  # now shape [B, 1, C, H, W]. H,W are original pixel dims of image
-                    feat=image_embeds #feature rep for the current frame that we are on, shape is [B, 1, N, C] want [B,1,N-1,C] ([1, 10, 256, 1408]), good
-                    pos = apm_mem_bank_model.init_positional_encoding(start_time = t)
-                    token_mask=None
-                    #print(f"Shape of feat:{feat.shape}")
-                    #print(f"Shape of pos:{pos.shape}")
-                    #print(f"Shape of frames:{frames.shape}")
-                    
-                    #update APM weights based on new frame
-                    avg_loss = []
-                    with torch.set_grad_enabled(True):
-                        for j in range(steps_per_slice):
-                            apm_optimizer.zero_grad()
-                            loss = apm_mem_bank_model.forward_wrapper(frames, feat, pos, token_mask)
-                            loss.backward()
-                            apm_optimizer.step()
-                            avg_loss.append(loss.item())
-                            #take last 10 entries and avg them 
-                            print(f"Slice {t+1}/{T}, Step {j+1}/{steps_per_slice}, Loss: {np.average(avg_loss[-10:])}")
-                    #print(f"Memory bank length:{self.memory_bank_length}")
-                    
-                    #############################################
-                    #############################################
+                    image_embeds_wholevid[:, t, :, :] = image_embeds_t
+                    image_atts_wholevid[:,t,:]=image_atts
+                
+                APM_weights = torch.zeros(B, 5, N-1, C, device=image.device, dtype=sample_embeds.dtype)  # Shape [B,5,N-1,C], N=257
+                for vid in range(B):
+                    n_slices = T//self.forward_chunk_size # set this equal to T//16
+                    #steps_per_slice = 10 #same as num epochs
+                    for i in range(n_slices):
+                        #############################################
+                        #############################################
+                        ################APM-CODE#####################
+                        t=i*self.forward_chunk_size
+                        print(f"We are at timestep t={t}")
+                        if t< self.memory_bank_length:
+                            #do 5 iterations of training
+                            steps_per_slice=5
+                        else:
+                            #do 2 iterations of training
+                            steps_per_slice=2
+                        # image shape B, C, T, H, W, image[:, :, t, :, :] 
+                        #frames=image[:, :, t, :, :] # want shape [B,1,C,H,W],torch.Size([1, 10, 3, 448, 448])
+                        frames = image[vid:vid+1, :, i*self.forward_chunk_size:(i+1)*self.forward_chunk_size, :, :]  #BCTHW     # shape: [1,C,self.forward_chunk_size, H, W] 
+                        frames = frames.permute(0, 2, 1, 3, 4)  # shape: [1, self.forward_chunk_size, C, H, W]
+                        #print(f"Frames shape: {frames.shape}")
+                        feat=image_embeds_wholevid[vid:vid+1,i*self.forward_chunk_size:(i+1)*self.forward_chunk_size,:,:] #[B, T, 257, 1408], want  ([1, self.forward_chunk_size, 256, 1408]), good
+                        pos = self.apm_mem_bank_model.init_positional_encoding(start_time = t)
+                        token_mask=None
+                        #print(f"Shape of feat:{feat.shape}")
+                        #print(f"Shape of pos:{pos.shape}")
+                        #print(f"Shape of frames:{frames.shape}")
+                        
+                        #update APM weights based on new frame
+                        avg_loss = []
+                        with torch.set_grad_enabled(True):
+                            for j in range(steps_per_slice):
+                                self.apm_optimizer.zero_grad()
+                                loss = self.apm_mem_bank_model.forward_wrapper(frames, feat, pos, token_mask)
+                                loss.backward()
+                                self.apm_optimizer.step()
+                                avg_loss.append(loss.item())
+                                #take last 10 entries and avg them 
+                                print(f"Slice {t+1}/{T}, Step {j+1}/{steps_per_slice}, Loss: {np.average(avg_loss[-10:])}")
+                    #save weights at the end
+                    apm_memory_bank_weights = self.apm_mem_bank_model.get_model_unfolded_params() # shape is torch.Size([5, 256, 1408])
+                    APM_weights[vid,:,:,:]=apm_memory_bank_weights
                 #now, freeze the APM
-                apm_memory_bank_weights = apm_mem_bank_model.get_model_unfolded_params() # shape is torch.Size([5, 256, 1408]), want shape [B,5, N, C]
-                apm_memory_bank_weights = apm_memory_bank_weights.unsqueeze(0)  # Shape: [1, 5, N, 1024]   
-                #torch.save(apm_mem_bank_model.state_dict(), 'apm_memory_bank_model.pth')
-                #forward pass through visual mem bank, qformers for each frame...
-                #here, T is the number of batches [:,:,1,:,:] is batch number one, [:,:,2,:,:] number 2 etc
-                for t in range(T):
-                    with self.maybe_autocast():
-                        image_embeds = self.ln_vision(self.visual_encoder(image[:, :, t, :, :])) #[B, 256+1, 1408]
-                    N, C = image_embeds.shape[-2:] # N is the number of patches associated with each image. The vision encoder takes in a frame, splits into 16 rows and 16 col of patches. C is the feature depth for each patch
-                    # for Breakfast, N is size __ and C is size __
-                    #print("The value of N: {N}")
-                    #print("The value of C: {C}")
-                    position_ids = torch.tensor([t]).long().to(image_embeds.device) #[1]
-                    position_ids = position_ids.unsqueeze(0).expand(B, -1) #[B, 1]
-                    image_embeds = image_embeds + self.image_pe(position_ids) # [B, N, C]
-                    image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(image.device) # [B, N]
-                    image_embeds = image_embeds.unsqueeze(1) # [B, 1, N, C]
+                ###############################
+                ###############################
+                ###############################
+                ###############################
+                #torch.save(self.apm_mem_bank_model.state_dict(), 'apm_memory_bank_model.pth')
 
+                #forward pass through visual mem bank, qformers for each frame...
+                #here, T is the number of frames
+                for t in range(T):
+                    image_embeds=image_embeds_wholevid[:,t:t+1,:,:] # [B,1,N,C]
+                    image_atts=image_atts_wholevid[:,t,:] # [B,N]
                     if t == 0:
                         encoder_hidden_states = image_embeds # [B, 1, N, C]
                         self.size_constant = torch.ones(B, 1, N).to(image_embeds.device) # [B, 1, N]
                     else:
                         encoder_hidden_states = torch.cat([self.visual_memory_bank, image_embeds], dim=1) # [B, (t+1), N, C], this is the input the cross attention step, will act as both Key and Value
-                    memory_bank_hidden_states_summed=encoder_hidden_states    
-                    #############################################
-                    #############################################
-                    ################APM-CODE#####################
                     
-                    print(f"We are at timestep t={t}")
-                    if t< self.memory_bank_length:
-                        #do 5 iterations of training
-                        steps_per_slice=3
-                    else:
-                        #do 2 iterations of training
-                        steps_per_slice=1
-                    
-                    # image shape B, C, T, H, W, image[:, :, t, :, :] 
-                    #frames=image[:, :, t, :, :] # want shape [B,1,C,H,W],torch.Size([1, 10, 3, 448, 448])
-                    frames = image[:, :, t, :, :]           # shape: [B, C, H, W] → 4D
-                    frames = frames.unsqueeze(2)            # shape: [B, C, 1, H, W] → 5D
-                    frames = frames.permute(0, 2, 1, 3, 4)  # shape: [B, 1, C, H, W]
-                    #print(f"Frames shape: {frames.shape}")
-                    #frames = frames.permute(0, 2, 1, 3, 4)  # now shape [B, 1, C, H, W]. H,W are original pixel dims of image
-                    feat=image_embeds #feature rep for the current frame that we are on, shape is [B, 1, N, C] want [B,1,N-1,C] ([1, 10, 256, 1408]), good
-                    pos = apm_mem_bank_model.init_positional_encoding(start_time = t)
-                    token_mask=None
-                    #print(f"Shape of feat:{feat.shape}")
-                    #print(f"Shape of pos:{pos.shape}")
-                    #print(f"Shape of frames:{frames.shape}")
-                    
-                    #update APM weights based on new frame
-                    avg_loss = []
-                    with torch.set_grad_enabled(True):
-                        for j in range(steps_per_slice):
-                            apm_optimizer.zero_grad()
-                            loss = apm_mem_bank_model.forward_wrapper(frames, feat, pos, token_mask)
-                            loss.backward()
-                            apm_optimizer.step()
-                            avg_loss.append(loss.item())
-                            #take last 10 entries and avg them 
-                            print(f"Slice {t+1}/{T}, Step {j+1}/{steps_per_slice}, Loss: {np.average(avg_loss[-10:])}")
-                    #add APM here!
-                    apm_memory_bank_weights = apm_mem_bank_model.get_model_unfolded_params() # shape is torch.Size([5, 256, 1408]), want shape [B,5, N, C]
-                    apm_memory_bank_weights = apm_memory_bank_weights.unsqueeze(0)  # Shape: [1, 5, N, 1024]
-                     # want shape [B,5, N, C]
-                    repeat_factor=self.memory_bank_length//5
-                    #print(f"Memory bank length:{self.memory_bank_length}")
-                    apm_memory_bank_weights = apm_memory_bank_weights.repeat(1, repeat_factor, 1, 1) # shape: [B, 20, N, C]
-                    ## add padding to vis mem bank so I can add it to the apm
-                    _, k, _, _ = self.visual_memory_bank.shape
-                    desired_k = self.memory_bank_length #should be 20
-                    #print(f"Shape of visual memory bank: {self.visual_memory_bank.shape}")
-                    if k < desired_k:
-                        pad_size = desired_k - k
-                        padding = torch.zeros(B, pad_size, N, C, device=self.visual_memory_bank.device, dtype=self.visual_memory_bank.dtype)
-                        visual_memory_bank_padded = torch.cat([self.visual_memory_bank, padding], dim=1)
-                    else:
-                        visual_memory_bank_padded = self.visual_memory_bank
-                    zeros = torch.zeros(B, self.memory_bank_length, 1, C, device=apm_memory_bank_weights.device, dtype=apm_memory_bank_weights.dtype) #[B, 20, 256, C] to [B, 20, 257, C] to match visual mem bank size
-                    #print(f"Shape of apm memory bank weights: {apm_memory_bank_weights.shape}")
-                    #print(f"Shape of zeros: {zeros.shape}")
-
-                    apm_memory_bank_weights_padded = torch.cat([apm_memory_bank_weights, zeros], dim=-2)
-                    ##print(f"Shape of padded visual memory bank: {visual_memory_bank_padded.shape}")
-                    #print(f"Shape of padded apm memory bank weights: {apm_memory_bank_weights_padded.shape}")
-
-                    #memory_bank_hidden_states_summed = visual_memory_bank_padded + apm_memory_bank_weights_padded # want shape to be [B, 20, N, C], N=257
-                    #print("visual mem bank size: ", self.visual_memory_bank.shape)
-                    #############################################
-                    #############################################
                     query_output = self.Qformer.bert(
                         text_Qformer.input_ids,
                         attention_mask=Qformer_atts,
                         query_embeds=query_tokens,
-                        encoder_hidden_states=visual_memory_bank_padded.view(B, -1, C),
-                        apm_hidden_states=apm_memory_bank_weights.view(B, -1, C),
+                        encoder_hidden_states=self.visual_memory_bank.view(B, -1, C),
+                        apm_hidden_states=APM_weights.view(B, -1, C),
                         encoder_attention_mask=image_atts,
                         return_dict=True,
                     )
@@ -373,8 +296,8 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     # If it is the last frame, delete the visual_memory_bank and compression_size
                     # Else, if the current length of the visual_memory_bank exceeds the threshold, compress the visual_memory_bank
                     if t == T - 1:
-                        del self.visual_memory_bank
-                        del self.compression_size
+                        self.visual_memory_bank = None
+                        self.compression_size = None
                     elif self.visual_memory_bank.size(1) > self.memory_bank_length:
                         self.visual_memory_bank, self.compression_size = memory_bank_compress(self.visual_memory_bank, self.compression_size)
             #this is if there is no mem bank... ignore...
@@ -476,12 +399,12 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
             )
 
         loss = outputs.loss
-        """
+        
         #########################################################
         #save the weights for the apm model
-        torch.save(apm_mem_bank_model.state_dict(), 'memory_bank_model.pth')
+        #torch.save(self.apm_mem_bank_model.state_dict(), 'memory_bank_model.pth')
         #########################################################
-        """
+        
         return {"loss": loss}
 
     @torch.no_grad()
@@ -549,20 +472,6 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                 ).to(image.device)
                 query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(image.device)  # [B, 32]
                 Qformer_atts = torch.cat([query_atts, text_Qformer.attention_mask], dim=1)
-
-                ######################################
-                ####define the optimizer, etc for 
-                ####the apm memory model
-                # have one APM for each video being processed.
-                
-                #initialize the APM memory bank
-                print("about to instantiate apm model ...")
-                apm_mem_bank_model = ApmMemoryBankModel(hidden_dim=1408, t = 1, h = 16, w = 16, fwd_chunk_size = 16) 
-                apm_mem_bank_model = apm_mem_bank_model.cuda() 
-                apm_optimizer = torch.optim.Adam(apm_mem_bank_model.parameters(), lr=1e-3)
-
-                print("apm made...")
-                ######################################
                 for t in range(T):
                     with self.maybe_autocast():
                         image_embeds = self.ln_vision(self.visual_encoder(image[:, :, t, :, :])).detach()  # [B, 256+1, 1408]
@@ -601,7 +510,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     #print(f"Frames shape: {frames.shape}")
                     #frames = frames.permute(0, 2, 1, 3, 4)  # now shape [B, 1, C, H, W]. H,W are original pixel dims of image
                     feat=image_embeds #feature rep for the current frame that we are on, shape is [B, 1, N, C] want [B,1,N-1,C] ([1, 10, 256, 1408]), good
-                    pos = apm_mem_bank_model.init_positional_encoding(start_time = t)
+                    pos = self.apm_mem_bank_model.init_positional_encoding(start_time = t)
                     token_mask=None
                     #print(f"Shape of feat:{feat.shape}")
                     #print(f"Shape of pos:{pos.shape}")
@@ -611,15 +520,15 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     avg_loss = []
                     with torch.set_grad_enabled(True):
                         for j in range(steps_per_slice):
-                            apm_optimizer.zero_grad()
-                            loss = apm_mem_bank_model.forward_wrapper(frames, feat, pos, token_mask)
+                            self.apm_optimizer.zero_grad()
+                            loss = self.apm_mem_bank_model.forward_wrapper(frames, feat, pos, token_mask)
                             loss.backward()
-                            apm_optimizer.step()
+                            self.apm_optimizer.step()
                             avg_loss.append(loss.item())
                             #take last 10 entries and avg them 
                             print(f"Slice {t+1}/{T}, Step {j+1}/{steps_per_slice}, Loss: {np.average(avg_loss[-10:])}")
                     #add APM here!
-                    apm_memory_bank_weights = apm_mem_bank_model.get_model_unfolded_params() # shape is torch.Size([5, 256, 1408]), want shape [B,5, N, C]
+                    apm_memory_bank_weights = self.apm_mem_bank_model.get_model_unfolded_params() # shape is torch.Size([5, 256, 1408]), want shape [B,5, N, C]
                     apm_memory_bank_weights = apm_memory_bank_weights.unsqueeze(0)  # Shape: [1, 5, N, 1024]
                      # want shape [B,5, N, C]
                     repeat_factor=self.memory_bank_length//5
