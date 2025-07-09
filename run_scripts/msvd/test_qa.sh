@@ -4,7 +4,7 @@
 
 
 checkpoint_path=$1
-torchrun --nproc_per_node=2 \
+torchrun --nproc_per_node=1 \
     --master_port=34652 \
     train.py \
     --cfg-path lavis/projects/malmm/qa_msvd.yaml \
@@ -17,12 +17,12 @@ torchrun --nproc_per_node=2 \
     model.vit_precision fp16 \
     model.freeze_vit True \
     model.memory_bank_length 10 \
-    model.num_frames 20 \
+    model.num_frames 40 \
     run.init_lr 1e-4 \
     run.max_epoch 5 \
     run.num_beams 5 \
-    run.batch_size_train 1 \
-    run.batch_size_eval 1 \
+    run.batch_size_train 8 \
+    run.batch_size_eval 8 \
     run.accum_grad_iters 1 \
     run.num_workers 10 \
     run.seed 42 \

@@ -165,7 +165,8 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         if image.dim() == 5:
             is_video = True
             B, C, T, H, W = image.shape #batch, channel (rgb), timestep, frame height, frame width
-            print(f"Image Shape: {image.shape}")
+            print(f"Image Shape: {image.shape}") # [8,3,20,224,224]
+            print(f"Image last timestep rgb val:{image[:,0,-1,0,0]}")
 
         if self.qformer_text_input:
             if is_video:
@@ -406,7 +407,8 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         if image.dim() == 5:
             is_video = True
             B, C, T, H, W = image.shape
-            print("The shape of the frames/images for vid",image.shape)
+            print(f"Image Shape: {image.shape}") # [8,3,20,224,224]
+            print(f"Image last timestep rgb val:{image[:,0,:,H//2,W//2]}")
 
         if isinstance(prompt, str):
             prompt = [prompt] * B
