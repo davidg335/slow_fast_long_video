@@ -54,6 +54,9 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         self.visual_encoder, self.ln_vision = self.init_vision_encoder(
             vit_model, img_size, drop_path_rate, use_grad_checkpoint, vit_precision
         )
+        print(f"hidden dimension:{self.visual_encoder.config.hidden_size}")
+        self.hidden_dim=self.visual_encoder.config.hidden_size
+
         if freeze_vit:
             for name, param in self.visual_encoder.named_parameters():
                 param.requires_grad = False
@@ -128,7 +131,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         #initialize the APM memory bank
         print("about to instantiate apm model ...")
         self.forward_chunk_size=16
-        self.apm_mem_bank_model = ApmMemoryBankModel(hidden_dim=1408, t = 16, h = self.img_size//14, w = self.img_size//14, fwd_chunk_size = self.forward_chunk_size) 
+        self.apm_mem_bank_model = ApmMemoryBankModel(hidden_dim=self.hidden_dim, t = 16, h = self.img_size//14, w = self.img_size//14, fwd_chunk_size = self.forward_chunk_size) 
         self.apm_mem_bank_model = self.apm_mem_bank_model.cuda() 
         self.apm_optimizer = torch.optim.Adam(self.apm_mem_bank_model.parameters(), lr=1e-3)
         print("apm made...")

@@ -159,15 +159,15 @@ class ApmMemoryBankModel(nn.Module):
         # print("pos", pos.shape)
         b, t, c, h, w = x.shape #h,w are 448. This is the original image
         #rearange and run conv 2d 
-        print("x shape at line 160:",x.shape) #torch.Size([1, 1, 3, 224, 224])
+        #print("x shape at line 160:",x.shape) #torch.Size([1, 1, 3, 224, 224])
         x = rearrange(x, 'b t c h w -> (b t) c h w')  # shape: [32, 3, 448, 448]
         x = self.conv1(x) # shape: [32, 3, 32, 32]
         # print("x shape", x.shape)
-        print("x shape at line 164:",x.shape) #torch.Size([1, 1, 16, 16])
+        #print("x shape at line 164:",x.shape) #torch.Size([1, 1, 16, 16])
         x = rearrange(x, '(b t) c h w -> (b t) (h w) c', t = t, h = self.h, w= self.w) #shape: [32,1024,3]
         x = x.squeeze(-1) # squeeze channel 
         # print("x shape", x.shape)
-        feat=feat = feat[:, :, :-1, :]  # removes the last token, the cls token from Vision encoder output
+        feat=feat[:, :, :-1, :]  # removes the last token, the cls token from Vision encoder output
 
         
         summary_feat = repeat(x, '(b t) d -> (b t)  h w d', t = t, h = self.h, w = self.w)
@@ -185,7 +185,7 @@ class ApmMemoryBankModel(nn.Module):
         input_feat = rearrange(input_feat, 'b t h w d -> (b t h w) d')  # shape: [1, 32, 32, 32, 1024]        
         #token_mask = rearrange(token_mask, 'b (t h w) -> (b t h w)', t = t, h = self.h, w = self.w).cuda()
         target_feat = rearrange(feat, 'b t (hw) d -> (b t hw) d')
-        print("input feat shape", input_feat.shape)
+        print("input feat shape", input_feat.shape) #[4096, 1664])
 
         # token_mask = token_mask.bool()  # in case it's 0/1
         # input_feat = input_feat[token_mask]  # filter out the masked tokens
@@ -201,14 +201,15 @@ class ApmMemoryBankModel(nn.Module):
         input_feat = input_feat[token_mask]  # filter out the masked tokens
         target_feat = target_feat[token_mask]
         # # Set selected indices to 1
-        
+        print("input_feat shape after token mask", input_feat.shape) #[, 1664])
+
         chunk_size = self.fwd_chunk_size
         n_chunks = input_feat.shape[0] // chunk_size
         if input_feat.shape[0] % chunk_size != 0:
             n_chunks += 1
         n_forwards = 0
         for i in range(n_chunks):
-            print(f"Chunk {i}, start {i*chunk_size}")
+            print(f"Chunk {i}/{n_chunks}, start {i*chunk_size}")
             
             start = i*chunk_size
             end = min((i+1)*chunk_size, input_feat.shape[0])

@@ -1,4 +1,4 @@
-torchrun --nproc_per_node=1 \
+torchrun --nproc_per_node=2 \
     --master_port=34651 \
     train.py \
     --cfg-path lavis/projects/malmm/qa_msvd.yaml \
