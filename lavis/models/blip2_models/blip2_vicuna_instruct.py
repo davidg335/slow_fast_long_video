@@ -399,7 +399,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     else:
                         self.visual_memory_bank = torch.cat([self.visual_memory_bank, image_embeds], dim=1)  # [B, t+1, N, C]
                         self.compression_size = torch.cat([self.compression_size, self.size_constant], dim=1)  # [B, t+1, N]
-
+                    print("The value of query_tokens:",{query_tokens})
                     query_output = self.Qformer.bert(
                         text_Qformer.input_ids,
                         attention_mask=Qformer_atts,

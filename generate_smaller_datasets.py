@@ -54,26 +54,51 @@ def sample_annotations(input_path, n, seed=42):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Sample a smaller subset of the dataset annotations.")
     parser.add_argument("dataset", type=str, help="Dataset name (e.g., 'breakfast', 'msvd', 'msrvtt')")
+    parser.add_argument("train_or_test",type=str,help="Training, validation, or test")
     args = parser.parse_args()
+    dataset = args.dataset.lower()        # 'breakfast', 'msvd', or 'msrvtt'
+    train_or_test = args.train_or_test.lower()  # 'train', 'val', or 'test'
 
-    dataset = args.dataset.lower()
-
+    #n chosen such that the run time is roughly 15 minutes
     if dataset == 'breakfast':
         n = 1
-        input_path = "./data/breakfast/annotation/val.json"
-        sample_annotations(input_path, n=n)
+        if train_or_test == 'val':
+            input_path = "./data/breakfast/annotation/val.json"
+            sample_annotations(input_path, n=n)
+        elif train_or_test == 'test':
+            input_path = "./data/breakfast/annotation/test.json"
+            sample_annotations(input_path, n=n)
+        elif train_or_test == 'train':
+            input_path = "./data/breakfast/annotation/train.json"
+            sample_annotations(input_path, n=n)
+        else:
+            print("Error: Invalid split for 'breakfast'. Choose from 'train', 'val', or 'test'.")
 
     elif dataset == 'msvd':
-        sample_annotations("./data/msvd/annotation/qa_val.json", n=1)
-        sample_annotations("./data/msvd/annotation/qa_test.json", n=2)
-        sample_annotations("./data/msvd/annotation/cap_val.json", n=6)
-        sample_annotations("./data/msvd/annotation/cap_test.json", n=39)
+        if train_or_test == 'val':
+            sample_annotations("./data/msvd/annotation/qa_val.json", n=1)
+            sample_annotations("./data/msvd/annotation/cap_val.json", n=6)
+        elif train_or_test == 'test':
+            sample_annotations("./data/msvd/annotation/qa_test.json", n=2)
+            sample_annotations("./data/msvd/annotation/cap_test.json", n=39)
+        elif train_or_test == 'train':
+            sample_annotations("./data/msvd/annotation/qa_train.json", n=5)   
+            sample_annotations("./data/msvd/annotation/cap_train.json", n=98)  # may be wrong
+        else:
+            print("Error: Invalid split for 'msvd'. Choose from 'train', 'val', or 'test'.")
 
     elif dataset == 'msrvtt':
-        sample_annotations("./data/msrvtt/annotation/qa_val.json", n=2)
-        sample_annotations("./data/msrvtt/annotation/qa_test.json", n=12)
-        sample_annotations("./data/msrvtt/annotation/cap_val.json", n=14)
-        sample_annotations("./data/msrvtt/annotation/cap_test.json", n=83)
+        if train_or_test == 'val':
+            sample_annotations("./data/msrvtt/annotation/qa_val.json", n=2)
+            sample_annotations("./data/msrvtt/annotation/cap_val.json", n=14)
+        elif train_or_test == 'test':
+            sample_annotations("./data/msrvtt/annotation/qa_test.json", n=12)
+            sample_annotations("./data/msrvtt/annotation/cap_test.json", n=83)
+        elif train_or_test == 'train':
+            sample_annotations("./data/msrvtt/annotation/qa_train.json", n=4)    # Placeholder: make sure files exist
+            sample_annotations("./data/msrvtt/annotation/cap_train.json", n=15)  # Placeholder: make sure files exist
+        else:
+            print("Error: Invalid split for 'msrvtt'. Choose from 'train', 'val', or 'test'.")
 
     else:
         print("Error: Dataset not found. Choose from 'breakfast', 'msvd', or 'msrvtt'.")

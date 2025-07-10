@@ -182,7 +182,7 @@ class MBBertSelfAttention(BertSelfAttention):
                 del self.compression_size
             elif self.query_memory_bank.size(1) > self.memory_bank_length:
                 self.query_memory_bank, self.compression_size = memory_bank_compress(self.query_memory_bank, self.compression_size)
-
+        print(f"The state of query memory bank : {query_memory_bank}")
         return outputs
 
 class Blip2Base(BaseModel):
