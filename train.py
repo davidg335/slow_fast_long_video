@@ -137,8 +137,9 @@ def main():
     runner = get_runner_class(cfg)(
         cfg=cfg, job_id=job_id, task=task, model=model, datasets=datasets
     )
+    print(f"Memory before train is called{torch.cuda.memory_summary()}")
     runner.train()
-
+    print(f"Memory after train is called{torch.cuda.memory_summary()}")
 
 if __name__ == "__main__":
     main()

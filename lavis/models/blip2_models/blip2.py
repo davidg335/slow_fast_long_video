@@ -174,6 +174,7 @@ class MBBertSelfAttention(BertSelfAttention):
             else:
                 self.query_memory_bank = torch.cat([self.query_memory_bank, hidden_states[:, None, :, :].detach()], dim=1) # [B, t+1, 32, C]
                 self.compression_size = torch.cat([self.compression_size, self.size_constant], dim=1) # [B, t+1, 32]
+            #print(f"The state of query memory bank : {self.query_memory_bank}")
 
             # if it is the last frame, delete the query_memory_bank and compression_size
             # else if the current length of the query_memory_bank exceeds the threshold, compress the query_memory_bank
@@ -182,7 +183,8 @@ class MBBertSelfAttention(BertSelfAttention):
                 del self.compression_size
             elif self.query_memory_bank.size(1) > self.memory_bank_length:
                 self.query_memory_bank, self.compression_size = memory_bank_compress(self.query_memory_bank, self.compression_size)
-        print(f"The state of query memory bank : {query_memory_bank}")
+        #print(f"Memory in Bert self attention: {torch.cuda.memory_summary()}")
+
         return outputs
 
 class Blip2Base(BaseModel):
@@ -211,6 +213,9 @@ class Blip2Base(BaseModel):
         encoder_config.cross_attention_freq = cross_attention_freq
         encoder_config.query_length = num_query_token
         encoder_config.memory_bank_length = memory_bank_length
+        # Set number of transformer layers to 10
+        #encoder_config.num_hidden_layers = 10
+
         Qformer = BertLMHeadModel.from_pretrained(
             "bert-base-uncased", config=encoder_config
         )

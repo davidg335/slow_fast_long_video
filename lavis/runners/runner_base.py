@@ -81,6 +81,8 @@ class RunnerBase:
         """
         A property to get the DDP-wrapped model on the device.
         """
+        # torch.cuda.empty_cache()  #  Add this
+        #print("cache is emptied")
         # move model to device
         if self._model.device != self.device:
             self._model = self._model.to(self.device)
