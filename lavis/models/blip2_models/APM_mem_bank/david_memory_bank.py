@@ -174,18 +174,19 @@ class ApmMemoryBankModel(nn.Module):
         summary_feat = rearrange(summary_feat, '(b t) h w d ->  b t h w d', b = b, t = t, h = self.h, w = self.w)
 
         # print("summary_feat shape", summary_feat.shape)
-        pos = rearrange(pos, '(t h w) d ->  t h w d', t = t, h = self.h, w = self.w)
+        pos= rearrange(pos, '(t h w) d ->  t h w d', t = self.t, h = self.h, w = self.w)
+        pos=pos[0:t,:,:,:]
         pos = repeat(pos, 't h w d -> b t h w d', b = b)
         
-        print("pos shape", pos.shape)
-        print("summary_feat shape", summary_feat.shape) #summary_feat shape torch.Size([1, 1, 16, 16, 256]), want the 256 to be 768
+        #print("pos shape", pos.shape)
+        #print("summary_feat shape", summary_feat.shape) #summary_feat shape torch.Size([1, 1, 16, 16, 256]), want the 256 to be 768
 
 
         input_feat = torch.cat([summary_feat, pos], dim=-1)
         input_feat = rearrange(input_feat, 'b t h w d -> (b t h w) d')  # shape: [1, 32, 32, 32, 1024]        
         #token_mask = rearrange(token_mask, 'b (t h w) -> (b t h w)', t = t, h = self.h, w = self.w).cuda()
         target_feat = rearrange(feat, 'b t (hw) d -> (b t hw) d')
-        print("input feat shape", input_feat.shape) #[4096, 1664])
+        #print("input feat shape", input_feat.shape) #[4096, 1664])
 
         # token_mask = token_mask.bool()  # in case it's 0/1
         # input_feat = input_feat[token_mask]  # filter out the masked tokens
@@ -201,7 +202,7 @@ class ApmMemoryBankModel(nn.Module):
         input_feat = input_feat[token_mask]  # filter out the masked tokens
         target_feat = target_feat[token_mask]
         # # Set selected indices to 1
-        print("input_feat shape after token mask", input_feat.shape) #[, 1664])
+        #print("input_feat shape after token mask", input_feat.shape) #[, 1664])
 
         chunk_size = self.fwd_chunk_size
         n_chunks = input_feat.shape[0] // chunk_size
@@ -209,7 +210,7 @@ class ApmMemoryBankModel(nn.Module):
             n_chunks += 1
         n_forwards = 0
         for i in range(n_chunks):
-            print(f"Chunk {i}/{n_chunks}, start {i*chunk_size}")
+            #print(f"Chunk {i}/{n_chunks}, start {i*chunk_size}")
             
             start = i*chunk_size
             end = min((i+1)*chunk_size, input_feat.shape[0])
@@ -226,8 +227,8 @@ class ApmMemoryBankModel(nn.Module):
             else:
                 feat_out = torch.cat([feat_out, feat_chunk], dim=0)
                 rgb_out = None #torch.cat([rgb_out, rgb_chunk], dim=0)
-        print("shape of feat_out",feat_out.shape)
-        print("shape of target_feat",target_feat.shape)
+        #print("shape of feat_out",feat_out.shape)
+        #print("shape of target_feat",target_feat.shape)
         
 
         feat_loss = F.mse_loss(feat_out, target_feat)

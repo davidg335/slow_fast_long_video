@@ -12,7 +12,8 @@ import torch.nn as nn
 import transformers
 
 from lavis.common.registry import registry
-from lavis.models.blip2_models.blip2 import Blip2Base, disabled_train, memory_bank_compress
+from lavis.models.blip2_models.blip2 import Blip2Base, disabled_train
+from lavis.models.blip2_models.Qformer import memory_bank_compress
 
 from lavis.models.blip2_models.APM_mem_bank.david_memory_bank import ApmMemoryBankModel
 import numpy as np
@@ -54,9 +55,19 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         self.visual_encoder, self.ln_vision = self.init_vision_encoder(
             vit_model, img_size, drop_path_rate, use_grad_checkpoint, vit_precision
         )
-        print(f"hidden dimension:{self.visual_encoder.config.hidden_size}")
-        self.hidden_dim=self.visual_encoder.config.hidden_size
-
+        """
+        #trying to figure out hidden dimension of the visual encoder
+        device = next(self.visual_encoder.parameters()).device
+        dtype = next(self.visual_encoder.parameters()).dtype  # Ensures correct fp16 or fp32
+        
+        dummy_input = torch.randn(1, 3, img_size, img_size, device=device, dtype=dtype)
+        with torch.no_grad():
+            output = self.visual_encoder(dummy_input)
+        print(f"Vision encoder output shape: {output.shape}")
+        print(f"hidden dimension:{output.shape[-1]}")
+        self.hidden_dim=output.shape[-1]
+        """
+        self.hidden_dim=1408
         if freeze_vit:
             for name, param in self.visual_encoder.named_parameters():
                 param.requires_grad = False
@@ -191,8 +202,10 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     max_length=self.max_txt_len,
                     return_tensors="pt",
                 ).to(image.device)
-                query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(image.device) # [B, N]
+                query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(image.device) # [B, N], N=32
                 Qformer_atts = torch.cat([query_atts, text_Qformer.attention_mask],dim=1)
+                apm_atts=torch.ones(B,5*(self.img_size//14)*(self.img_size//14), dtype=torch.long).to(image.device) # [B,256*5]
+                print("Apm_atts shape",apm_atts.shape)
                 ########APM#######################
                 print("Starting APM training...")
                 #get the image embeddings for the whole video
@@ -211,7 +224,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     position_ids = torch.tensor([t]).long().to(image_embeds_t.device) #[1]
                     position_ids = position_ids.unsqueeze(0).expand(B, -1) #[B, 1]
                     image_embeds_t = image_embeds_t + self.image_pe(position_ids) # [B, N, C]
-                    image_atts = torch.ones(image_embeds_t.size()[:-1], dtype=torch.long).to(image.device) # [B, N]
+                    image_atts = torch.ones(image_embeds_t.size()[:-1], dtype=torch.long).to(image.device) # [B, N], N is 257
                     #image_embeds_t = image_embeds_t.unsqueeze(1) # [B, 1, N, C]
 
                     image_embeds_wholevid[:, t, :, :] = image_embeds_t
@@ -219,7 +232,8 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                 
                 APM_weights = torch.zeros(B, 5, N-1, C, device=image.device, dtype=sample_embeds.dtype)  # Shape [B,5,N-1,C], N=257
                 for vid in range(B):
-                    n_slices = T//self.forward_chunk_size # set this equal to T//16
+                    print("video",vid)
+                    n_slices = T//self.forward_chunk_size+1 # set this equal to T//16
                     #steps_per_slice = 10 #same as num epochs
                     for i in range(n_slices):
                         #############################################
@@ -229,7 +243,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         print(f"We are at timestep t={t}")
                         if t< self.memory_bank_length:
                             #do 5 iterations of training
-                            steps_per_slice=5
+                            steps_per_slice=2
                         else:
                             #do 2 iterations of training
                             steps_per_slice=2
@@ -250,12 +264,12 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         with torch.set_grad_enabled(True):
                             for j in range(steps_per_slice):
                                 self.apm_optimizer.zero_grad()
-                                loss = self.apm_mem_bank_model.forward_wrapper(frames, feat, pos, token_mask)
+                                loss = self.apm_mem_bank_model.forward_wrapper(frames, feat.detach(), pos.detach(), token_mask)
                                 loss.backward()
                                 self.apm_optimizer.step()
                                 avg_loss.append(loss.item())
                                 #take last 10 entries and avg them 
-                                print(f"Slice {t+1}/{T}, Step {j+1}/{steps_per_slice}, Loss: {np.average(avg_loss[-10:])}")
+                                print(f"Slice {t+1}/{T}, Step {j+1}/{steps_per_slice}, Loss: {np.average(avg_loss[:])}")
                     #save weights at the end
                     apm_memory_bank_weights = self.apm_mem_bank_model.get_model_unfolded_params() # shape is torch.Size([5, 256, 1408])
                     APM_weights[vid,:,:,:]=apm_memory_bank_weights
@@ -269,6 +283,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                 #forward pass through visual mem bank, qformers for each frame...
                 #here, T is the number of frames
                 for t in range(T):
+                    #print("frame",t)
                     image_embeds=image_embeds_wholevid[:,t:t+1,:,:] # [B,1,N,C]
                     image_atts=image_atts_wholevid[:,t,:] # [B,N]
                     if t == 0:
@@ -281,8 +296,9 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         text_Qformer.input_ids,
                         attention_mask=Qformer_atts,
                         query_embeds=query_tokens,
-                        encoder_hidden_states=self.visual_memory_bank.view(B, -1, C),
+                        encoder_hidden_states=encoder_hidden_states.view(B, -1, C),
                         apm_hidden_states=APM_weights.view(B, -1, C),
+                        apm_attention_mask=apm_atts,
                         encoder_attention_mask=image_atts,
                         return_dict=True,
                     )
@@ -299,10 +315,12 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     # If it is the last frame, delete the visual_memory_bank and compression_size
                     # Else, if the current length of the visual_memory_bank exceeds the threshold, compress the visual_memory_bank
                     if t == T - 1:
-                        self.visual_memory_bank = None
-                        self.compression_size = None
+                        del self.visual_memory_bank
+                        del self.compression_size
                     elif self.visual_memory_bank.size(1) > self.memory_bank_length:
                         self.visual_memory_bank, self.compression_size = memory_bank_compress(self.visual_memory_bank, self.compression_size)
+
+                    
             #this is if there is no mem bank... ignore...
             else:
                 query_tokens = self.query_tokens.expand(B * T, -1, -1)
