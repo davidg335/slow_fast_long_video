@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -c 10                                # Number of CPU cores
+#SBATCH -c 8                                # Number of CPU cores
 #SBATCH --gres=gpu:ampere:2                  # Request 2 Ampere GPUs
 #SBATCH --job-name=test_msvd_qa             # Optional job name
 #SBATCH --output=logs/msvd_test_qa_%j.out        # STDOUT + STDERR to file (useful for debugging)

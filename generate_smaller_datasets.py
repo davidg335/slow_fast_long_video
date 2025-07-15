@@ -5,7 +5,7 @@ import argparse
 
 """
 To run this file run
-python generate_smaller_datasets.py {dataset}
+python generate_smaller_datasets.py {dataset} {train/test/val}
 where dataset is msvd, msrvtt, breakfast
 """
 
@@ -76,13 +76,13 @@ if __name__ == "__main__":
 
     elif dataset == 'msvd':
         if train_or_test == 'val':
-            sample_annotations("./data/msvd/annotation/qa_val.json", n=1)
+            sample_annotations("./data/msvd/annotation/qa_val.json", n=3)
             sample_annotations("./data/msvd/annotation/cap_val.json", n=6)
         elif train_or_test == 'test':
             sample_annotations("./data/msvd/annotation/qa_test.json", n=2)
             sample_annotations("./data/msvd/annotation/cap_test.json", n=39)
         elif train_or_test == 'train':
-            sample_annotations("./data/msvd/annotation/qa_train.json", n=5)   
+            sample_annotations("./data/msvd/annotation/qa_train.json", n=10)   
             sample_annotations("./data/msvd/annotation/cap_train.json", n=98)  # may be wrong
         else:
             print("Error: Invalid split for 'msvd'. Choose from 'train', 'val', or 'test'.")
