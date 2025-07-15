@@ -101,7 +101,7 @@ class ApmMemoryBankModel(nn.Module):
         pos_3d = PositionalEncoding3D(self.hidden_dim).cuda()
         t, h, w = self.t, self.h, self.w        
         fw = torch.zeros(1,t,h,w,self.hidden_dim).cuda()
-        print("called pos_3d....")
+        #print("called pos_3d....")
         pos = pos_3d.forward(fw, start_time = start_time).squeeze(0)
         pos = rearrange(pos, 't h w c -> (t h w) c')
         pos = pos.cuda() # h*w*l , 1024 
@@ -148,7 +148,7 @@ class ApmMemoryBankModel(nn.Module):
         p5 = self.fc5.weight.data      # already [P, C]
         p6 = self.fc6.weight.data.T    # [C, P] → [P, C]
         
-        print(f"Model unfolded params:{torch.stack([p2, p3, p4, p5, p6]).shape}")
+        #print(f"Model unfolded params:{torch.stack([p2, p3, p4, p5, p6]).shape}")
         return torch.stack([p2, p3, p4, p5, p6])  # shape: [5, P, C]
         
     

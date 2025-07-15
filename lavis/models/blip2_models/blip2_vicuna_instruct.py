@@ -17,6 +17,7 @@ from lavis.models.blip2_models.Qformer import memory_bank_compress
 
 from lavis.models.blip2_models.APM_mem_bank.david_memory_bank import ApmMemoryBankModel
 import numpy as np
+import os
 
 @registry.register_model("blip2_vicuna_instruct_malmm")
 class Blip2VicunaInstruct_MALMM(Blip2Base):
@@ -138,14 +139,15 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         self.visual_memory_bank = None
         self.image_pe = nn.Embedding(max_num_frames, 1408)
         nn.init.constant_(self.image_pe.weight, 0.0)
-        print("init for Blip2")
+        #print("init for Blip2")
         #initialize the APM memory bank
-        print("about to instantiate apm model ...")
+        #print("about to instantiate apm model ...")
         self.forward_chunk_size=16
         self.apm_mem_bank_model = ApmMemoryBankModel(hidden_dim=self.hidden_dim, t = 16, h = self.img_size//14, w = self.img_size//14, fwd_chunk_size = self.forward_chunk_size) 
         self.apm_mem_bank_model = self.apm_mem_bank_model.cuda() 
-        self.apm_optimizer = torch.optim.Adam(self.apm_mem_bank_model.parameters(), lr=1e-3)
-        print("apm made...")
+        self.apm_optimizer = torch.optim.Adam(self.apm_mem_bank_model.parameters(), lr=1e-4)
+        #print("apm made...")
+        self.epoch=1
 
 
 
@@ -178,15 +180,29 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         # print(samples["text_input"])
         # print(samples["text_output"])
         # print('-----------------')
-        print("entering forward pass")
+        #print("entering forward pass")
+        self.apm_mem_bank_model.train()
+        model_path = 'memory_bank_model.pth'
+        
+        """
+        # Check if the file exists
+        if os.path.exists(model_path) and self.epoch>1:
+            print(f"Loading memory bank model from '{model_path}'...")
+            self.apm_mem_bank_model.load_state_dict(torch.load(model_path), strict=True)
+            print("Model loaded successfully.")
+        else:
+            print(f"No memory bank model found at '{model_path}'. Skipping load.")
+        """
+        #print("Epoch ", self.epoch)
+        self.epoch=self.epoch+1
         image = samples["image"]
         # For video data
         is_video = False
         if image.dim() == 5:
             is_video = True
             B, C, T, H, W = image.shape #batch, channel (rgb), timestep, frame height, frame width
-            print(f"Image Shape: {image.shape}") # [8,3,20,224,224]
-            print(f"Image info:{image[:,0,-1,0,0]}")
+            #print(f"Image Shape: {image.shape}") # [8,3,20,224,224]
+            #print(f"Image info:{image[:,0,-1,0,0]}")
         if self.qformer_text_input:
             if is_video:
                 text_input = [text for text in samples["text_input"] for _ in range(T)]
@@ -205,9 +221,9 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                 query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(image.device) # [B, N], N=32
                 Qformer_atts = torch.cat([query_atts, text_Qformer.attention_mask],dim=1)
                 apm_atts=torch.ones(B,5*(self.img_size//14)*(self.img_size//14), dtype=torch.long).to(image.device) # [B,256*5]
-                print("Apm_atts shape",apm_atts.shape)
+                #print("Apm_atts shape",apm_atts.shape)
                 ########APM#######################
-                print("Starting APM training...")
+                #print("Starting APM training...")
                 #get the image embeddings for the whole video
                 with torch.no_grad():
                     with self.maybe_autocast():
@@ -235,14 +251,14 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                 imagenet_std = torch.as_tensor([0.229, 0.224, 0.225], dtype=image.dtype, device=image.device)
                 n_slices = T//self.forward_chunk_size+1 # set this equal to T//16
                 for vid in range(B):
-                    print("video",vid)
+                    #print("video",vid)
                     #steps_per_slice = 10 #same as num epochs
                     for i in range(n_slices):
                         #############################################
                         #############################################
                         ################APM-CODE#####################
                         t=i*self.forward_chunk_size
-                        print(f"We are at timestep t={t}")
+                        #print(f"We are at timestep t={t}")
                         if t< self.memory_bank_length:
                             #do 5 iterations of training
                             steps_per_slice=2
@@ -271,18 +287,22 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                                 apm_loss = self.apm_mem_bank_model.forward_wrapper(frames.detach(), feat.detach(), pos.detach(), token_mask)
                                 apm_loss.backward()
                                 for name, param in self.apm_mem_bank_model.named_parameters():
-                                    print(param)
+                                    #print(param)
                                     if param.grad is not None and torch.isnan(param.grad).any():
                                         print(f"NaN gradient in {name}")
                                 self.apm_optimizer.step()
                                 avg_loss.append(apm_loss.item())
                                 #take last 10 entries and avg them 
-                                print(f"Slice {t+1}/{T}, Step {j+1}/{steps_per_slice}, Loss: {np.average(avg_loss[:])}")
+                                #print(f"Slice {t+1}/{T}, Step {j+1}/{steps_per_slice}, Loss: {avg_loss[-1]}") #np.average(avg_loss[-2:])
                     #save weights at the end
                     with torch.no_grad():
                         apm_memory_bank_weights = self.apm_mem_bank_model.get_model_unfolded_params().detach() # shape is torch.Size([5, 256, 1408])
                     APM_weights[vid,:,:,:]=apm_memory_bank_weights
                 #now, freeze the APM
+                #########################################################
+                #save the weights for the apm model
+                torch.save(self.apm_mem_bank_model.state_dict(), model_path)
+                #########################################################
                 ###############################
                 ###############################
                 ###############################
@@ -433,10 +453,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
 
         loss = outputs.loss
         
-        #########################################################
-        #save the weights for the apm model
-        #torch.save(self.apm_mem_bank_model.state_dict(), 'memory_bank_model.pth')
-        #########################################################
+       
         
         return {"loss": loss}
 
@@ -455,6 +472,8 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         temperature=1,
     ):
         print("generating!!")
+        self.apm_mem_bank_model.eval()
+
         self.llm_tokenizer.padding_side = "left"
 
         if "prompt" in samples.keys():

@@ -64,7 +64,7 @@ class PositionalEncoding3D(nn.Module):
         #x here is the number of frames for which positional encoding is genearted 
         
         pos_x = torch.arange(start_time, start_time + x, device=tensor.device, dtype=self.inv_freq.dtype)
-        print("pos_x", pos_x)
+        #print("pos_x", pos_x)
         pos_y = torch.arange(y, device=tensor.device, dtype=self.inv_freq.dtype)
         pos_z = torch.arange(z, device=tensor.device, dtype=self.inv_freq.dtype)
         # print("aa", pos_x.device, self.inv_freq.device)
