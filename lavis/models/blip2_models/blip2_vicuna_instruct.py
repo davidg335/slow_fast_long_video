@@ -231,9 +231,11 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     image_atts_wholevid[:,t,:]=image_atts
                 
                 APM_weights = torch.zeros(B, 5, N-1, C, device=image.device, dtype=sample_embeds.dtype)  # Shape [B,5,N-1,C], N=257
+                imagenet_mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=image.dtype, device=image.device)
+                imagenet_std = torch.as_tensor([0.229, 0.224, 0.225], dtype=image.dtype, device=image.device)
+                n_slices = T//self.forward_chunk_size+1 # set this equal to T//16
                 for vid in range(B):
                     print("video",vid)
-                    n_slices = T//self.forward_chunk_size+1 # set this equal to T//16
                     #steps_per_slice = 10 #same as num epochs
                     for i in range(n_slices):
                         #############################################
@@ -251,6 +253,8 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         #frames=image[:, :, t, :, :] # want shape [B,1,C,H,W],torch.Size([1, 10, 3, 448, 448])
                         frames = image[vid:vid+1, :, i*self.forward_chunk_size:(i+1)*self.forward_chunk_size, :, :]  #BCTHW     # shape: [1,C,self.forward_chunk_size, H, W] 
                         frames = frames.permute(0, 2, 1, 3, 4)  # shape: [1, self.forward_chunk_size, C, H, W]
+                        frames = (frames - imagenet_mean[None, :, None, None]) / imagenet_std[None, :, None, None]
+                        frames = frames.cuda()
                         #print(f"Frames shape: {frames.shape}")
                         feat=image_embeds_wholevid[vid:vid+1,i*self.forward_chunk_size:(i+1)*self.forward_chunk_size,:,:] #[B, T, 257, 1408], want  ([1, self.forward_chunk_size, 256, 1408]), good
                         pos = self.apm_mem_bank_model.init_positional_encoding(start_time = t)
@@ -264,14 +268,19 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         with torch.set_grad_enabled(True):
                             for j in range(steps_per_slice):
                                 self.apm_optimizer.zero_grad()
-                                loss = self.apm_mem_bank_model.forward_wrapper(frames, feat.detach(), pos.detach(), token_mask)
-                                loss.backward()
+                                apm_loss = self.apm_mem_bank_model.forward_wrapper(frames.detach(), feat.detach(), pos.detach(), token_mask)
+                                apm_loss.backward()
+                                for name, param in self.apm_mem_bank_model.named_parameters():
+                                    print(param)
+                                    if param.grad is not None and torch.isnan(param.grad).any():
+                                        print(f"NaN gradient in {name}")
                                 self.apm_optimizer.step()
-                                avg_loss.append(loss.item())
+                                avg_loss.append(apm_loss.item())
                                 #take last 10 entries and avg them 
                                 print(f"Slice {t+1}/{T}, Step {j+1}/{steps_per_slice}, Loss: {np.average(avg_loss[:])}")
                     #save weights at the end
-                    apm_memory_bank_weights = self.apm_mem_bank_model.get_model_unfolded_params() # shape is torch.Size([5, 256, 1408])
+                    with torch.no_grad():
+                        apm_memory_bank_weights = self.apm_mem_bank_model.get_model_unfolded_params().detach() # shape is torch.Size([5, 256, 1408])
                     APM_weights[vid,:,:,:]=apm_memory_bank_weights
                 #now, freeze the APM
                 ###############################
@@ -282,6 +291,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
 
                 #forward pass through visual mem bank, qformers for each frame...
                 #here, T is the number of frames
+                
                 for t in range(T):
                     #print("frame",t)
                     image_embeds=image_embeds_wholevid[:,t:t+1,:,:] # [B,1,N,C]
@@ -319,7 +329,9 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                         del self.compression_size
                     elif self.visual_memory_bank.size(1) > self.memory_bank_length:
                         self.visual_memory_bank, self.compression_size = memory_bank_compress(self.visual_memory_bank, self.compression_size)
+                    
 
+            
                     
             #this is if there is no mem bank... ignore...
             else:

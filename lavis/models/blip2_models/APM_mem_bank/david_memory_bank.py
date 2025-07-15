@@ -300,7 +300,7 @@ if __name__ == "__main__":
         feat = torch.stack(feats, dim=0) 
         # feat = feat.unsqueeze(0).cuda()  # add one batch dimension
         frames = torch.stack([transforms.ToTensor()(frame) for frame in frames], dim=0)  # shape: [n_frames, 3, H, W]
-        frames = frames.unsqueeze(0)  # shape: [1, n_frames, 3, H
+        frames = frames.unsqueeze(0)  # shape: [1, n_frames, 3, H,W]
         #normalize the frames to Imagenet Stats
         imagenet_mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=frames.dtype, device=frames.device)
         imagenet_std = torch.as_tensor([0.229, 0.224, 0.225], dtype=frames.dtype, device=frames.device)

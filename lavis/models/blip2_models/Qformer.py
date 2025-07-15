@@ -1385,6 +1385,9 @@ class MBBertSelfAttention(BertSelfAttention):
                 attention_scores = attention_scores + torch.cat([attention_mask] * (self.query_memory_bank.size(1) + 1), dim=-1)
             else:
                 attention_scores = attention_scores + attention_mask
+        
+        #print("attention_scores max:", attention_scores.max())
+        #print("attention_scores mean:", attention_scores.mean())
 
         # Normalize the attention scores to probabilities.
         attention_probs = nn.Softmax(dim=-1)(attention_scores)
