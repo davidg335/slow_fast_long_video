@@ -15,13 +15,13 @@ torchrun --nproc_per_node=2 \
     run.init_lr 1e-4 \
     run.max_epoch 5 \
     run.num_beams 5 \
-    run.batch_size_train 4 \
-    run.batch_size_eval 4 \
+    run.batch_size_train 8 \
+    run.batch_size_eval 8 \
     run.accum_grad_iters 1 \
     run.num_workers 8 \
     run.seed 42 \
     run.evaluate False \
-    run.valid_splits "['val', 'test']" \
+    run.valid_splits "['val']" \
     run.report_metric True \
-    run.prefix train
-    # run.resume_ckpt_path
+    run.prefix train \
+    run.resume_ckpt_path None
