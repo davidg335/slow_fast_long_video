@@ -48,7 +48,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         from lavis.models.blip2_models.modeling_llama import LlamaForCausalLM
         
         self.tokenizer = self.init_tokenizer(truncation_side="left")
-        print(f"Memory before vis encoder is called{torch.cuda.memory_summary()}")
+        #print(f"Memory before vis encoder is called{torch.cuda.memory_summary()}")
         self.visual_encoder, self.ln_vision = self.init_vision_encoder(
             vit_model, img_size, drop_path_rate, use_grad_checkpoint, vit_precision
         )
@@ -58,7 +58,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
             self.visual_encoder = self.visual_encoder.eval()
             self.visual_encoder.train = disabled_train
             logging.info("freeze vision encoder")
-        print(f"Memory before  qformer is called{torch.cuda.memory_summary()}")
+        #print(f"Memory before  qformer is called{torch.cuda.memory_summary()}")
         self.Qformer, self.query_tokens = self.init_Qformer(
             num_query_token, self.visual_encoder.num_features, memory_bank_length=memory_bank_length, num_frames=num_frames,
         )
@@ -122,7 +122,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
         self.visual_memory_bank = None
         self.image_pe = nn.Embedding(max_num_frames, 1408)
         nn.init.constant_(self.image_pe.weight, 0.0)
-        print(f"Memory at end of vicuna instrcut init {torch.cuda.memory_summary()}")
+        #print(f"Memory at end of vicuna instrcut init {torch.cuda.memory_summary()}")
 
     def concat_text_input_output(self, input_ids, input_atts, output_ids, output_atts):
         input_part_targets_len = []
@@ -400,7 +400,7 @@ class Blip2VicunaInstruct_MALMM(Blip2Base):
                     else:
                         self.visual_memory_bank = torch.cat([self.visual_memory_bank, image_embeds], dim=1)  # [B, t+1, N, C]
                         self.compression_size = torch.cat([self.compression_size, self.size_constant], dim=1)  # [B, t+1, N]
-                    print("The value of query_tokens:",{query_tokens})
+                    #print("The value of query_tokens:",{query_tokens})
                     query_output = self.Qformer.bert(
                         text_Qformer.input_ids,
                         attention_mask=Qformer_atts,
