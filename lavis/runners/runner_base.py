@@ -371,6 +371,9 @@ class RunnerBase:
         best_agg_metric = [0 for i in range(len(self.valid_splits))]
         best_epoch = 0
         best_val_log = [{} for i in range(len(self.valid_splits))]
+                # Track train loss over epochs
+        self.train_losses = []
+
 
         self.log_config()
 
@@ -383,6 +386,12 @@ class RunnerBase:
             if not self.evaluate_only:
                 logging.info("Start training")
                 train_stats = self.train_epoch(cur_epoch)
+                # Store training loss
+                if "loss" in train_stats:
+                    self.train_losses.append(train_stats["loss"])
+                else:
+                    logging.warning("No 'loss' key in train_stats")
+
                 self.log_stats(split_name="train", stats=train_stats)
                 self._save_checkpoint(cur_epoch, is_best=False)
 
@@ -427,6 +436,12 @@ class RunnerBase:
         # testing phase
         test_epoch = "best" if len(self.valid_splits) > 0 else cur_epoch
         self.evaluate(cur_epoch=test_epoch, skip_reload=self.evaluate_only)
+        
+        # Save loss curve
+        loss_log_path = os.path.join(self.output_dir, "train_losses.json")
+        with open(loss_log_path, "w") as f:
+            json.dump(self.train_losses, f)
+        logging.info(f"Saved training loss log to {loss_log_path}")
 
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
