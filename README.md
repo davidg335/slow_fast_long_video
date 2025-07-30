@@ -9,7 +9,7 @@ This repo is a fork of the MA-LMM paper. To see my slow fast implementation, go 
 
 ## Poster
 <p align="center">
-<img src="figs/Slide1.jpg" alt="model" width="80%">
+<img src="figs/Slide1.jpg" alt="model" width="100%">
 </p>
 
 
