@@ -1,3 +1,31 @@
+# Slow-Fast Weights for Long-Term Video Understanding
+
+This repo is a fork of the MA-LMM paper. To see my slow fast implementation, go to the "APM_cross_attention" branch. This work was done summer 2025 at the University of Central Florida Center for Research in Computer Vision Research Experience for Undergrads under Rajat Modi and Dr. Rawat.
+
+
+
+
+
+
+## Poster
+<p align="center">
+<img src="figs/Slide1.jpg" alt="model" width="80%">
+</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # (2024CVPR) MA-LMM: Memory-Augmented Large Multimodal Model for Long-Term Video Understanding
 ### [Project Page](https://boheumd.github.io/MA-LMM/) | [Paper](https://arxiv.org/abs/2404.05726)
 The official repository of our paper "**MA-LMM: Memory-Augmented Large Multimodal Model for Long-Term Video Understanding**".
